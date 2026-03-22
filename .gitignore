@@ -1,0 +1,6 @@
+.idea/
+.claude/
+.superpowers/
+node_modules/
+dist/
+.env
