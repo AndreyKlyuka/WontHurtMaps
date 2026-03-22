@@ -86,7 +86,7 @@ wonthurtmaps/
 - [ ] `load` command: idempotent upsert into DB, preserves admin-modified records
 - [ ] Verify: seed data loaded correctly, streets available for fuzzy matching
 
-See [Seed Data Pipeline Design](./superpowers/specs/2026-03-22-seed-data-pipeline-design.md) for details.
+See [Seed Data Pipeline Design](./seed-data-pipeline-design.md) for details.
 
 ### 0.5 Docker & Deployment Setup
 
@@ -113,7 +113,7 @@ See [Seed Data Pipeline Design](./superpowers/specs/2026-03-22-seed-data-pipelin
 ```yaml
 services:
   db:
-    image: postgis/postgis:16-3.4
+    image: postgis/postgis:17-3.5
     volumes: [pgdata:/var/lib/postgresql/data]
     environment: [POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD]
     ports: ["5432:5432"]  # dev only, removed in prod
