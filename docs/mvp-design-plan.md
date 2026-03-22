@@ -35,42 +35,42 @@ System for parsing Telegram channel posts about dangerous locations in a city, e
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        ANGULAR FRONTEND                         │
-│  ┌──────────┐  ┌──────────────┐  ┌────────────┐  ┌──────────┐ │
-│  │  Leaflet  │  │  Heatmap     │  │  Date/Mode │  │  Admin   │ │
-│  │  Map      │  │  Layer       │  │  Filters   │  │  Panel   │ │
-│  └──────────┘  └──────────────┘  └────────────┘  └──────────┘ │
+│  ┌──────────┐  ┌──────────────┐  ┌────────────┐  ┌──────────┐   │
+│  │  Leaflet │  │  Heatmap     │  │  Date/Mode │  │  Admin   │   │
+│  │  Map     │  │  Layer       │  │  Filters   │  │  Panel   │   │
+│  └──────────┘  └──────────────┘  └────────────┘  └──────────┘   │
 └────────────────────────┬────────────────────────────────────────┘
                          │ REST API (JSON / GeoJSON)
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                     PYTHON BACKEND (FastAPI)                     │
-│                                                                  │
+│                     PYTHON BACKEND (FastAPI)                    │
+│                                                                 │
 │  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐ │
-│  │  Public API   │  │  Scheduler   │  │  Processing Pipeline   │ │
-│  │  /api/*       │  │  (hourly)    │  │                        │ │
-│  │               │  │              │  │  1. Telegram Fetcher   │ │
-│  │  Admin API    │  │  Triggers    │  │  2. Text Preprocessor  │ │
-│  │  /api/admin/* │──│─ pipeline ──▶│  │  3. NLP Analyzer       │ │
-│  │  (JWT auth)   │  └──────────────┘  │  4. Geocoder           │ │
-│  └──────────────┘                     │  5. Data Normalizer    │ │
-│                                       └────────────────────────┘ │
-│  ┌──────────────────────────────────────────────────────────────┐│
-│  │                    Service Layer                              ││
-│  │  ┌─────────────┐ ┌──────────────┐ ┌────────────────────────┐││
-│  │  │ SlangDict   │ │ StreetRename │ │ ConfidenceScorer       │││
-│  │  │ Service     │ │ Service      │ │ Service                │││
-│  │  │ (self-learn)│ │ (old→new)    │ │ (exact/street/area)    │││
-│  │  └─────────────┘ └──────────────┘ └────────────────────────┘││
-│  └──────────────────────────────────────────────────────────────┘│
+│  │  Public API  │  │  Scheduler   │  │  Processing Pipeline   │ │
+│  │  /api/*      │  │  (hourly)    │  │                        │ │
+│  │              │  │              │  │  1. Telegram Fetcher   │ │
+│  │  Admin API   │  │  Triggers    │  │  2. Text Preprocessor  │ │
+│  │  /api/admin/*│──│─ pipeline ──▶│  │  3. NLP Analyzer       │ │
+│  │  (JWT auth)  │  └──────────────┘  │  4. Geocoder           │ │
+│  └──────────────┘                    │  5. Data Normalizer    │ │
+│                                      └────────────────────────┘ │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │                    Service Layer                           │ │
+│  │  ┌─────────────┐ ┌──────────────┐ ┌──────────────────────┐ │ │
+│  │  │ SlangDict   │ │ StreetRename │ │ ConfidenceScorer     │ │ │
+│  │  │ Service     │ │ Service      │ │ Service              │ │ │
+│  │  │ (self-learn)│ │ (old→new)    │ │ (exact/street/area)  │ │ │
+│  │  └─────────────┘ └──────────────┘ └──────────────────────┘ │ │
+│  └────────────────────────────────────────────────────────────┘ │
 └────────────────────────┬────────────────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                  POSTGRESQL + PostGIS                            │
-│  ┌──────────┐ ┌───────────┐ ┌──────────┐ ┌──────────────────┐  │
-│  │ posts    │ │ locations │ │ slang_   │ │ street_renames   │  │
-│  │ (raw)    │ │ (geo)     │ │ dict     │ │ (old → new)      │  │
-│  └──────────┘ └───────────┘ └──────────┘ └──────────────────┘  │
+│                  POSTGRESQL + PostGIS                           │
+│  ┌──────────┐ ┌───────────┐ ┌──────────┐ ┌──────────────────┐   │
+│  │ posts    │ │ locations │ │ slang_   │ │ street_renames   │   │
+│  │ (raw)    │ │ (geo)     │ │ dict     │ │ (old → new)      │   │
+│  └──────────┘ └───────────┘ └──────────┘ └──────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -614,7 +614,7 @@ Request: `{ resolved_name, entity_type }`
 **MVP:** Pipeline runs as a **separate Python process** (not inside FastAPI).
 
 ```
-┌─────────────────┐       ┌─────────────────┐
+┌──────────────────┐       ┌──────────────────┐
 │  FastAPI (API)   │       │  Worker process  │
 │  serves frontend │       │  APScheduler     │
 │  + admin panel   │       │  + pipeline      │
