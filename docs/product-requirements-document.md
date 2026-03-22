@@ -54,6 +54,9 @@ City residents lack a convenient way to assess the safety of specific locations 
 | A5 | As an admin, I want to see worker and pipeline status | Worker health indicator, last run time |
 | A6 | As an admin, I want to manually trigger the pipeline | Trigger button, execution status |
 | A7 | As an admin, I want to retry processing of failed posts | Retry button per post |
+| A8 | As an admin, I want to see the processing log for all posts with the system's decision chain | Feed of posts with extraction → rename → geocode steps, filterable by status/confidence/date |
+| A9 | As an admin, I want to validate street renames before the system uses them | Pending renames list with activate/edit/reject actions |
+| A10 | As an admin, I want to configure the Telegram channel to monitor | Input link, resolve to channel, see connection status, enable/disable |
 
 ---
 
@@ -77,7 +80,7 @@ City residents lack a convenient way to assess the safety of specific locations 
 | FR-2.1 | Preprocessing: emoji removal, Unicode normalization, slang replacement | Must |
 | FR-2.2 | Rule-based location extraction with fuzzy matching (rapidfuzz) | Must |
 | FR-2.3 | Abbreviation expansion (вул., пр., бульв., etc.) | Must |
-| FR-2.4 | spaCy NER as fallback for posts without rule-based results | Should |
+| FR-2.4 | ~~spaCy NER~~ — deferred to post-MVP. Rule-based + fuzzy matching + admin review sufficient | ~~Should~~ |
 | FR-2.5 | Ukrainian and Russian language support | Must |
 | FR-2.6 | Unrecognized token logging with occurrence counting | Should |
 
@@ -85,7 +88,7 @@ City residents lack a convenient way to assess the safety of specific locations 
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| FR-3.1 | Fallback chain: cache → Photon (local) → Nominatim → district dictionary | Must |
+| FR-3.1 | Fallback chain: cache → Nominatim (public) → district dictionary | Must |
 | FR-3.2 | Geocode cache with 90-day TTL | Must |
 | FR-3.3 | Bounding box validation (out-of-city results → fallback or out_of_bounds) | Must |
 | FR-3.4 | Street rename mapping (old → new) | Should |
@@ -98,7 +101,7 @@ City residents lack a convenient way to assess the safety of specific locations 
 |----|-------------|----------|
 | FR-4.1 | Weighted confidence: `(extraction_score * 0.5) + (geocoder_score * 0.5)` | Must |
 | FR-4.2 | Thresholds: >= 0.7 auto-resolved, 0.4-0.7 flagged, < 0.4 unresolved | Must |
-| FR-4.3 | Confidence penalties: NER-only (x 0.5), out-of-bounds (x 0.3), fuzzy 80-89% (x 0.8) | Must |
+| FR-4.3 | Confidence penalties: out-of-bounds (x 0.3), fuzzy 80-89% (x 0.8) | Must |
 
 ### FR-5: Public Map
 
@@ -233,8 +236,7 @@ Backend (FastAPI)          Worker (APScheduler + Pipeline)
 | Service | Role | Availability | Fallback |
 |---------|------|-------------|----------|
 | Telegram MTProto | Data source | Requires account + session | N/A — primary data source |
-| Photon (local) | Primary geocoder | Self-hosted, high availability | Nominatim |
-| Nominatim (public) | Fallback geocoder | Public, no SLA, rate-limited | District dictionary |
+| Nominatim (public) | Primary geocoder (MVP) | Public, no SLA, rate-limited 1 req/sec | District dictionary + geocode cache |
 | OSRM (public) | Route building | Public, no SLA | HTTP 503 + user message |
 | OpenStreetMap tiles | Map rendering | Public, high availability | N/A |
 
@@ -252,6 +254,7 @@ Backend (FastAPI)          Worker (APScheduler + Pipeline)
 - Public API for third-party consumers
 - Celery + Redis (APScheduler for MVP)
 - Custom Nominatim instance
+- Local Photon geocoder (add when Nominatim rate limit becomes a bottleneck)
 
 ---
 
@@ -274,7 +277,7 @@ Backend (FastAPI)          Worker (APScheduler + Pipeline)
 |------|--------|-------------|------------|
 | Telegram account ban | System stops ingesting data | Medium | Dedicated account, respectful rate limits, session persistence |
 | Low extraction accuracy | Map data unreliable | Medium | Rule-based + NER combo, admin review queue, self-learning dictionary |
-| Photon/Nominatim data staleness | Wrong geocoding for renamed streets | Low | `street_renames` table, periodic Photon data refresh |
+| Nominatim data staleness | Wrong geocoding for renamed streets | Low | `street_renames` table with admin validation |
 | OSRM downtime | Route check unavailable | Low | Graceful degradation (503), feature non-critical |
 | Slang evolution | Dictionary becomes outdated | Medium | Self-learning workflow, unrecognized token tracking, admin tools |
 | High post volume spike | Pipeline can't keep up | Low | Batch processing, advisory locks, scalability thresholds trigger Celery migration |

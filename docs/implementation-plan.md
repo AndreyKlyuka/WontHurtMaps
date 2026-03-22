@@ -12,26 +12,56 @@ Phased implementation plan for the MVP based on the [MVP Design Document](./mvp-
 
 **Goal:** Set up the development environment, CI, and base project structure.
 
+### Monorepo Structure
+
+```
+wonthurtmaps/
+  backend/           ← Python: FastAPI API + Worker
+    app/
+      api/
+      worker/
+      core/
+      models/
+      services/
+    pyproject.toml
+  frontend/          ← Angular 21
+    src/app/
+      core/
+      features/map/
+      features/admin/
+      shared/
+    package.json
+  scripts/           ← Seed data, Telegram auth
+  data/seed/         ← Generated & static seed data (JSON)
+  docker/            ← Dockerfiles
+  docs/              ← Project documentation
+  docker-compose.yml
+  .env.example
+  .editorconfig
+  package.json       ← Root: husky + lint-staged only
+```
+
 ### 0.1 Backend (Python/FastAPI)
 - [ ] Initialize Python project (pyproject.toml / Poetry or uv)
-- [ ] Package structure: `app/api/`, `app/worker/`, `app/core/`, `app/models/`, `app/services/`
-- [ ] Set up FastAPI entry point (`app/api/main.py`)
-- [ ] Set up Worker entry point (`app/worker/main.py`)
+- [ ] Package structure: `backend/app/api/`, `backend/app/worker/`, `backend/app/core/`, `backend/app/models/`, `backend/app/services/`
+- [ ] Set up FastAPI entry point (`backend/app/api/main.py`)
+- [ ] Set up Worker entry point (`backend/app/worker/main.py`)
 - [ ] Base configuration via pydantic-settings (ENV vars)
 - [ ] Dockerfile for API and Worker
-- [ ] Docker Compose: API + Worker + PostgreSQL/PostGIS + Photon
+- [ ] CORS middleware: allow `localhost:4200` in dev (Angular dev server), restrictive in production
+- [ ] Docker Compose: API + Worker + PostgreSQL/PostGIS
 
 ### 0.2 Frontend (Angular)
-- [ ] Initialize Angular project (standalone components, no SSR needed)
+- [ ] Initialize Angular 21 project in `frontend/` (standalone components, no SSR needed)
 - [ ] Install dependencies: Leaflet, leaflet.heat, leaflet.markercluster
-- [ ] Base structure: `core/`, `features/map/`, `features/admin/`, `shared/`
+- [ ] Base structure: `frontend/src/app/core/`, `frontend/src/app/features/map/`, `frontend/src/app/features/admin/`, `frontend/src/app/shared/`
 - [ ] Proxy config for API (development)
 - [ ] Dockerfile for frontend (nginx + build)
 - [ ] Add to docker-compose
 
 ### 0.3 Database
 - [ ] PostgreSQL + PostGIS in docker-compose
-- [ ] Alembic for migrations
+- [ ] Alembic for migrations (autogenerate from SQLAlchemy models)
 - [ ] Initial migration: create all tables per Design Document schema
   - `cities`, `posts`, `locations`, `slang_dictionary`, `street_renames`
   - `channel_state`, `geocode_cache`, `districts`, `unrecognized_tokens`, `worker_heartbeat`
@@ -39,12 +69,28 @@ Phased implementation plan for the MVP based on the [MVP Design Document](./mvp-
 - [ ] Spatial indexes on `locations.geometry`
 
 ### 0.4 External Services
-- [ ] Photon: docker image with Ukraine extract, port configuration
-- [ ] Verify Photon API availability (`localhost:2322`)
+- [ ] Nominatim public API as sole geocoder for MVP (no local Photon)
+- [ ] Geocode cache (DB-based, 90-day TTL) to minimize Nominatim requests
+- [ ] Rate limiter: 1 req/sec to Nominatim (token bucket)
+- [ ] Post-MVP: add local Photon instance if Nominatim rate limit becomes a bottleneck
+
+### 0.4.1 Seed Data Pipeline
+- [ ] `scripts/seed_data.py` — main orchestrator with `generate` and `load` commands
+- [ ] `scripts/osm_extractor.py` — Overpass API queries for streets, districts, renames
+- [ ] `scripts/ru_name_generator.py` — rule-based Ukrainian → Russian name transformation
+- [ ] `data/seed/abbreviations.json` — static abbreviation list (committed to git)
+- [ ] Extract streets from OSM: `name`, `name:ru`, `old_name`, centroid coordinates
+- [ ] Generate Russian names for streets missing `name:ru` via rule-based transformation
+- [ ] Extract district polygons from OSM (`boundary=administrative`, `place=suburb/quarter`)
+- [ ] Extract street renames from OSM `old_name` tags → `status=pending` in DB
+- [ ] `load` command: idempotent upsert into DB, preserves admin-modified records
+- [ ] Verify: seed data loaded correctly, streets available for fuzzy matching
+
+See [Seed Data Pipeline Design](./superpowers/specs/2026-03-22-seed-data-pipeline-design.md) for details.
 
 ### 0.5 Docker & Deployment Setup
 
-**Development mode:** only infrastructure services run in Docker (db, photon). Backend and frontend run locally for fast feedback loop (hot reload, debugger).
+**Development mode:** only infrastructure services run in Docker (db). Backend and frontend run locally for fast feedback loop (hot reload, debugger).
 
 **Production mode:** everything runs in Docker via `docker-compose.yml`. Target: VPS (Hetzner/DigitalOcean, 4GB RAM) with reverse proxy + SSL.
 
@@ -55,7 +101,7 @@ Phased implementation plan for the MVP based on the [MVP Design Document](./mvp-
 - Single Dockerfile, two entrypoints:
   - API: `uvicorn app.api.main:app --host 0.0.0.0 --port 8000`
   - Worker: `python -m app.worker`
-- No spaCy models baked into image — downloaded on first run or via init script (keeps image smaller, models versioned separately)
+- No NLP models in MVP image — spaCy/LLM deferred to post-MVP
 
 #### Frontend Dockerfile (`docker/frontend.Dockerfile`)
 - Multi-stage build:
@@ -73,34 +119,27 @@ services:
     ports: ["5432:5432"]  # dev only, removed in prod
     healthcheck: pg_isready
 
-  photon:
-    image: komoot/photon
-    volumes: [photon_data:/photon/photon_data]
-    ports: ["2322:2322"]
-    # First run: import Ukraine extract (see 0.4)
-
   api:
-    build: { dockerfile: docker/backend.Dockerfile }
+    build: { context: ./backend, dockerfile: ../docker/backend.Dockerfile }
     command: uvicorn app.api.main:app --host 0.0.0.0 --port 8000
     depends_on: { db: { condition: service_healthy } }
     environment: [DATABASE_URL, TELEGRAM_API_ID, TELEGRAM_API_HASH, JWT_SECRET]
     ports: ["8000:8000"]
 
   worker:
-    build: { dockerfile: docker/backend.Dockerfile }
+    build: { context: ./backend, dockerfile: ../docker/backend.Dockerfile }
     command: python -m app.worker
-    depends_on: { db: { condition: service_healthy }, photon: { condition: service_started } }
-    environment: [DATABASE_URL, TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_SESSION]
+    depends_on: { db: { condition: service_healthy } }
+    environment: [DATABASE_URL, TELEGRAM_API_ID, TELEGRAM_API_HASH]
     volumes: [telegram_sessions:/app/sessions]  # Telethon session persistence
 
   frontend:
-    build: { dockerfile: docker/frontend.Dockerfile }
+    build: { context: ./frontend, dockerfile: ../docker/frontend.Dockerfile }
     ports: ["80:80"]
     depends_on: [api]
 
 volumes:
   pgdata:
-  photon_data:
   telegram_sessions:
 ```
 
@@ -108,7 +147,38 @@ volumes:
 - `.env` file for local development (git-ignored)
 - `.env.example` committed with placeholder values
 - Production: env vars set on VPS directly or via deployment script
-- Sensitive values: `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_SESSION`, `JWT_SECRET`, `POSTGRES_PASSWORD`
+- Session file: `sessions/telegram.session` — created by `scripts/telegram_auth.py`, mounted as Docker volume, never in git
+
+**`.env.example` contents:**
+```env
+# Database
+POSTGRES_DB=wonthurtmaps
+POSTGRES_USER=wonthurt
+POSTGRES_PASSWORD=changeme
+DATABASE_URL=postgresql://wonthurt:changeme@localhost:5432/wonthurtmaps
+
+# Telegram API (https://my.telegram.org)
+TELEGRAM_API_ID=12345678
+TELEGRAM_API_HASH=your_api_hash_here
+
+# Telegram channel (dev-only fallback, production uses admin panel)
+TELEGRAM_CHANNEL_LINK=
+
+# Auth
+JWT_SECRET=changeme_generate_random_string
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=changeme
+
+# API
+API_HOST=0.0.0.0
+API_PORT=8000
+CORS_ORIGINS=http://localhost:4200
+
+# Worker
+PIPELINE_INTERVAL_MINUTES=60
+NOMINATIM_RATE_LIMIT=1.0
+NOMINATIM_QUEUE_MAX=500
+```
 
 #### Production Extras (post-MVP, not in Phase 0)
 - Nginx reverse proxy with Let's Encrypt SSL (Caddy or nginx-proxy + acme-companion)
@@ -116,8 +186,49 @@ volumes:
 - Log rotation for containers
 - Backup script for PostgreSQL volume
 
+### 0.6 Developer Experience Tooling
+
+**Goal:** Consistent code style, automated checks on commit, unified editor settings across the monorepo.
+
+#### EditorConfig (root)
+- [ ] `.editorconfig` at project root — indent style, charset, trailing whitespace, final newline
+- [ ] Settings: `indent_size = 2` for frontend (ts, html, scss, json, yaml), `indent_size = 4` for Python
+
+#### Frontend (Angular) — ESLint + Prettier
+- [ ] `angular-eslint` — installed via `ng add @angular-eslint/schematics`
+- [ ] `eslint-config-prettier` + `eslint-plugin-prettier` — Prettier as ESLint rule (single pass)
+- [ ] `.prettierrc` — config: `singleQuote: true`, `trailingComma: 'all'`, `printWidth: 120`
+- [ ] `.prettierignore` — dist, coverage, node_modules
+- [ ] Verify: `ng lint` runs ESLint + Prettier checks
+
+#### Backend (Python) — Ruff
+- [ ] `ruff` as dev dependency — linter + formatter in one tool (replaces black, flake8, isort)
+- [ ] `ruff.toml` or `[tool.ruff]` section in `pyproject.toml`:
+  - `line-length = 120`
+  - `target-version = "py312"`
+  - `select` — `E`, `F`, `W`, `I` (isort), `UP` (pyupgrade), `B` (bugbear), `SIM` (simplify)
+  - `format.quote-style = "double"`
+- [ ] `mypy` as dev dependency — strict type checking for core modules (`app/core/`, `app/services/`)
+- [ ] `mypy` config in `pyproject.toml`: `strict = false`, `warn_return_any = true`, `disallow_untyped_defs` for selected packages
+
+#### Git Hooks — Husky + lint-staged
+- [ ] `husky` — install, `husky init`, `.husky/pre-commit` hook
+- [ ] `lint-staged` config in root `package.json` (or `.lintstagedrc`):
+  - `"*.{ts,html}"` → `eslint --fix`
+  - `"*.{ts,html,scss,json,md,yaml}"` → `prettier --write`
+  - `"*.py"` → `ruff check --fix && ruff format`
+- [ ] Root `package.json` with `devDependencies` only (husky, lint-staged) — serves as monorepo hook anchor
+- [ ] Verify: staged files are linted/formatted before commit; non-staged files are untouched
+
+#### IDE Recommendations (WebStorm)
+- [ ] `.idea/` added to `.gitignore` (except shared configs below)
+- [ ] Shared run configurations in `.idea/runConfigurations/` (git-tracked): `ng serve`, `ruff check`, `docker-compose up`
+- [ ] `.idea/codeStyles/` — project code style delegated to EditorConfig + Prettier + Ruff (no IDE-specific overrides)
+- [ ] Verify: WebStorm picks up `.editorconfig`, Prettier config (built-in support), and ESLint config automatically
+- [ ] Ruff plugin for WebStorm — external tool or file watcher for Python linting/formatting on save
+
 ### Deliverable
-Docker-compose up brings all services online. API responds to health check. Frontend shows an empty page with a map. DB with all tables created.
+Docker-compose up brings all services online. API responds to health check. Frontend shows an empty page with a map. DB with all tables created. Pre-commit hooks enforce code style on every commit.
 
 ---
 
@@ -127,10 +238,19 @@ Docker-compose up brings all services online. API responds to health check. Fron
 
 ### 1.1 Telegram Client
 - [ ] Telethon client with session persistence
-- [ ] Configuration: API ID, API Hash, phone/session via ENV
-- [ ] Authorization and session file storage
+- [ ] Configuration: API ID, API Hash via ENV
+- [ ] `scripts/telegram_auth.py` — interactive CLI script for first-time auth (phone → code → optional 2FA)
+- [ ] Session file stored in `sessions/` directory (git-ignored, Docker volume in production)
+- [ ] Worker reads session from `sessions/telegram.session` on startup
+- [ ] Auth error handling: log warning, worker enters idle mode until session is fixed
 
-### 1.2 Fetcher Service
+### 1.2 Channel Resolution
+- [ ] Worker reads active channel from `channel_state` table
+- [ ] Dev fallback: if no channel in DB, read `TELEGRAM_CHANNEL_LINK` from ENV
+- [ ] If neither DB nor ENV has channel — worker starts in idle mode, logs warning
+- [ ] Channel link resolution: parse t.me / web.telegram.org links → extract numeric channel_id via Telethon
+
+### 1.3 Fetcher Service
 - [ ] Incremental fetching: `last_message_id` from `channel_state`
 - [ ] Bootstrap mode: fetch last N messages on first run
 - [ ] Batch fetching (100 messages per request)
@@ -139,11 +259,11 @@ Docker-compose up brings all services online. API responds to health check. Fron
 - [ ] Exponential backoff on network errors (3 attempts)
 - [ ] Save raw post to `posts` table with status `pending`
 
-### 1.3 Deleted Post Tracking
+### 1.4 Deleted Post Tracking
 - [ ] Handle `DeletedMessage` events
 - [ ] Soft-delete: `is_deleted = true`
 
-### 1.4 Worker Integration
+### 1.5 Worker Integration
 - [ ] APScheduler: hourly job
 - [ ] Advisory lock (`pg_try_advisory_lock`) to prevent parallel execution
 - [ ] Heartbeat: write to `worker_heartbeat` every 60 seconds
@@ -172,28 +292,22 @@ Worker starts, connects to Telegram, fetches posts into DB. On restart, resumes 
 - [ ] Pattern-based extraction: `<street> + <number>`, `район + <name>`, `біля + <landmark>`
 - [ ] Output: `location_type`, `address`, `landmarks`, `confidence`
 
-### 2.3 Location Analyzer — spaCy NER (fallback)
-- [ ] spaCy `uk_core_news_sm` / `ru_core_news_sm`
-- [ ] LOC/GPE entity extraction
-- [ ] Validate extracted entities against city dictionaries
-- [ ] Confidence penalty (x 0.5) for NER-only results
-
-### 2.4 Unrecognized Token Logging
+### 2.3 Unrecognized Token Logging
 - [ ] Save unrecognized tokens to `unrecognized_tokens`
 - [ ] Increment `occurrence_count` for known tokens
 - [ ] Store `sample_post_ids` (up to 5)
 
-### 2.5 Geocoder
+### 2.4 Geocoder
 - [ ] Geocode cache lookup
-- [ ] Street rename mapping (`street_renames` table)
-- [ ] Photon geocoding (primary)
-- [ ] Nominatim geocoding (fallback) with rate-limit queue (1 req/sec, token bucket)
-- [ ] District/landmark dictionary with fixed coordinates
+- [ ] Street rename mapping (`street_renames` table, only active renames)
+- [ ] Nominatim geocoding with rate-limit queue (1 req/sec, token bucket)
+- [ ] District dictionary with fixed coordinates
 - [ ] Bounding box validation (city bbox)
 - [ ] Out-of-bounds handling: try next fallback, save with `out_of_bounds = true`
 - [ ] Queue overflow protection (max 500, remainder stays `pending` until next cycle)
+- [ ] 3 consecutive Nominatim failures → skip for remainder of cycle
 
-### 2.6 Data Normalizer
+### 2.5 Data Normalizer
 - [ ] Determine geometry type (Point/Polygon)
 - [ ] `geo_type` metadata (point/street/area/district)
 - [ ] Confidence scoring: `(extraction_score * 0.5) + (geocoder_score * 0.5)`
@@ -201,7 +315,7 @@ Worker starts, connects to Telegram, fetches posts into DB. On restart, resumes 
 - [ ] Save to `locations` table
 - [ ] Low confidence → `status = unresolved`
 
-### 2.7 Pipeline Orchestration
+### 2.6 Pipeline Orchestration
 - [ ] Batch processing (100 posts)
 - [ ] Transaction with savepoint per post
 - [ ] Failure handling: `status=failed`, `error_message`, `retry_count`
@@ -297,7 +411,11 @@ Public map with all filters, heatmap, clustering, route check. Fully functional 
 - [ ] Processed today (info): posts, locations, cache hit rate
 - [ ] Clickable counters → filtered lists
 
-### 4.4 Admin Frontend — Unresolved Posts
+### 4.4 Admin Frontend — Processing Log & Unresolved Posts
+- [ ] `AdminProcessingLogComponent` (`/admin/processing-log`)
+- [ ] Feed of all processed posts with full decision chain (extraction → rename → geocode)
+- [ ] Filterable by status, confidence, date
+- [ ] Admin can validate/reject rename mappings, correct wrong location bindings
 - [ ] `AdminUnresolvedComponent` (`/admin/unresolved`)
 - [ ] Table with raw text, suggested location, post date
 - [ ] Mini-map per post for manual resolution
@@ -309,8 +427,21 @@ Public map with all filters, heatmap, clustering, route check. Fully functional 
 - [ ] Approve / Edit / Reject actions
 - [ ] Unrecognized tokens section
 
+### 4.6 Admin Frontend — Channel Management
+- [ ] `AdminChannelComponent` (`/admin/channel`)
+- [ ] Input field for Telegram link (t.me or web.telegram.org format)
+- [ ] "Connect" button → calls `POST /api/admin/channel`, shows connection status
+- [ ] Display: channel title, channel_id, is_active toggle, last fetch time
+- [ ] MVP: single channel, future: list of channels with add/remove
+
+### 4.7 Admin Frontend — Street Renames Validation
+- [ ] Street renames section in admin panel (tab or separate page)
+- [ ] Table of pending renames from seed data (old name → new name)
+- [ ] Activate / Edit / Reject actions per rename
+- [ ] Only active renames are used by the geocoder pipeline
+
 ### Deliverable
-Full admin panel: dashboard with counters, unresolved post management, dictionary management, worker monitoring.
+Full admin panel: dashboard with counters, processing log, unresolved post management, dictionary management, street renames validation, worker monitoring.
 
 ---
 
@@ -377,6 +508,7 @@ Phase 0 (Infrastructure)
 
 A phase is considered complete when:
 1. All phase checkboxes are done
-2. Code is covered by tests (unit + integration where appropriate)
-3. Docker compose brings up all services without errors
-4. Documentation updated as needed
+2. Docker compose brings up all services without errors
+3. Documentation updated as needed
+
+**Testing:** deferred to post-MVP. Manual verification during development.

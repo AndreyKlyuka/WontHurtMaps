@@ -23,8 +23,8 @@ System for parsing Telegram channel posts about dangerous locations in a city, e
 | Frontend | Angular + Leaflet (OSM tiles) |
 | Backend / API | Python, FastAPI |
 | Telegram client | Telethon (MTProto) |
-| Text analysis | Rule-based (primary) + spaCy NER (fallback) + city dictionaries |
-| Geocoding | Photon (local, primary) + Nominatim (fallback) |
+| Text analysis | Rule-based + rapidfuzz fuzzy matching + city dictionaries (post-MVP: spaCy NER or LLM) |
+| Geocoding | Nominatim public API + geocode cache (post-MVP: local Photon) |
 | Routing | OSRM (free) |
 | Database | PostgreSQL + PostGIS |
 | Scheduler | APScheduler (MVP), migration-ready for Celery + Redis |
@@ -132,13 +132,7 @@ Analysis priority: rule-based system first, spaCy NER only as fallback for posts
   - `район/мікрорайон + <name>` → district
   - `біля/поруч/навпроти + <landmark>` → landmark proximity
 
-**Step 3: spaCy NER (fallback only)**
-- Runs only if Step 2 found no locations
-- spaCy `uk_core_news_sm` / `ru_core_news_sm` for LOC/GPE entity extraction
-- Extracted entities are validated against city dictionaries (token-level fuzzy)
-- NER results without dictionary confirmation get confidence penalty (× 0.5)
-
-**Step 4: Unrecognized token logging**
+**Step 3: Unrecognized token logging**
 - If neither Step 2 nor Step 3 found locations, extract candidate tokens (nouns, capitalized words, n-grams not in stop-list) and save to `unrecognized_tokens` table
 - Each unique token tracked with `occurrence_count` — incremented on every new post containing it
 - Admin panel shows top unrecognized tokens sorted by frequency → quick path to expanding dictionaries
@@ -150,12 +144,11 @@ Analysis priority: rule-based system first, spaCy NER only as fallback for posts
 
 **4. Geocoder**
 - Check geocode cache first (same street should not be geocoded repeatedly)
-- Map old street names → new via `street_renames` table
+- Map old street names → new via `street_renames` table (only active renames)
 - Sequential fallback chain:
   1. Geocode cache lookup
-  2. Local Photon instance (primary, no rate limits)
-  3. Nominatim public API (fallback, rate-limited queue — see below)
-  4. District/landmark dictionary with fixed coordinates/polygons
+  2. Nominatim public API (rate-limited, 1 req/sec — see below)
+  3. District dictionary with fixed coordinates/polygons
 - **Bounding box validation:** if geocoder result is outside city bbox:
   - Do NOT reject immediately — try next fallback in chain
   - If all fallbacks return out-of-bbox results → save best result with `out_of_bounds = true` and confidence penalty (× 0.3), route to admin review instead of silent discard
@@ -164,17 +157,13 @@ Analysis priority: rule-based system first, spaCy NER only as fallback for posts
 
 **Nominatim rate-limit queue:**
 - In-memory queue with 1 req/sec rate limiter (token bucket)
-- During normal operation: queue is near-empty (most queries resolved by cache + Photon)
+- During normal operation: queue is near-empty (most queries resolved by cache)
 - During bootstrap (cold cache): queue may grow — posts waiting for Nominatim are processed asynchronously, marked as `status = pending` until geocoded
 - Queue overflow protection: if queue exceeds 500 items, remaining posts stay as `status = pending` and are retried on next pipeline cycle
 - Metrics: log queue depth per cycle for monitoring
+- If Nominatim returns errors/timeouts (3 consecutive failures) → skip for remainder of cycle
 
-**Photon setup:**
-- Open-source geocoder built on OSM data (komoot/photon)
-- Import only Ukraine extract (~1-2 GB vs 100+ GB full planet)
-- Runs as local Java service, REST API on `localhost:2322`
-- API compatible with Nominatim response format → minimal code changes
-- No rate limits — handles 100+ req/sec locally
+**Post-MVP:** if Nominatim rate limit becomes a bottleneck, add local Photon instance (komoot/photon with Ukraine OSM extract) as primary geocoder. Nominatim becomes fallback.
 
 **5. Data Normalizer**
 - Determine geometry type based on data:
@@ -215,8 +204,7 @@ confidence = (extraction_score * 0.5) + (geocoder_score * 0.5)
 
 - `extraction_score`:
   - Rule-based match: `rapidfuzz_score / 100` (e.g., 0.92 for 92% token match)
-  - NER-only match: `spacy_confidence * 0.5` (penalty for unconfirmed NER)
-  - Rule-based + NER agree: `max(rule_score, ner_score)` (mutual confirmation)
+  - Fuzzy match 80-89%: penalty (× 0.8)
 - `geocoder_score`: 1.0 if exact match, 0.7 if partial, 0.3 if only district-level, 0.0 if failed
 
 Thresholds:
@@ -344,9 +332,12 @@ detected → pending (inactive, not used for matching)
 |--------|------|-------------|
 | id | SERIAL PK | |
 | city_id | FK → cities | |
-| old_name | VARCHAR | Previous street name |
-| new_name | VARCHAR | Current official name |
+| old_name_uk | VARCHAR | Previous street name (Ukrainian) |
+| old_name_ru | VARCHAR | Previous street name (Russian) |
+| new_name_uk | VARCHAR | Current official name (Ukrainian) |
+| new_name_ru | VARCHAR | Current official name (Russian) |
 | year_renamed | INT | Year of renaming |
+| status | ENUM | pending, active, rejected — admin validates before system uses the rename |
 
 ### channel_state
 
@@ -354,8 +345,12 @@ detected → pending (inactive, not used for matching)
 |--------|------|-------------|
 | id | SERIAL PK | |
 | city_id | FK → cities | |
-| channel_id | BIGINT | Telegram channel ID |
+| channel_id | BIGINT | Telegram channel numeric ID (resolved from link) |
+| channel_link | VARCHAR NULL | Original link as entered by admin (t.me or web link) |
+| channel_title | VARCHAR NULL | Channel title (fetched via Telethon on add) |
+| is_active | BOOLEAN DEFAULT TRUE | Whether worker should fetch from this channel |
 | last_message_id | BIGINT | Last fetched message ID for incremental sync |
+| created_at | TIMESTAMPTZ | When the channel was added |
 | updated_at | TIMESTAMPTZ | When last_message_id was updated |
 
 ### geocode_cache
@@ -499,6 +494,18 @@ Request: `{ resolved_name, entity_type }`
 
 **`POST /api/admin/posts/{id}/retry`** — Re-queue a failed/permanent_failure post for reprocessing. Resets `status = pending`, `retry_count = 0`. Useful when pipeline bug was fixed and old failures need reprocessing.
 
+**`GET /api/admin/channel`** — Current channel configuration. Returns channel_id, channel_link, channel_title, is_active, last_message_id, connection status.
+
+**`POST /api/admin/channel`** — Add/update channel. Admin provides a Telegram link (t.me or web link). Backend resolves link → numeric channel_id via Telethon, verifies account has access, fetches channel title. Saves to `channel_state`. MVP: one channel only (upsert).
+
+Request: `{ channel_link, city_id }`
+
+**`POST /api/admin/channel/{id}/toggle`** — Enable/disable channel fetching. Sets `is_active` flag.
+
+**`GET /api/admin/processing-log`** — Paginated feed of all processed posts with full decision chain: extraction method, matched street, rename applied, geocode result, confidence breakdown. Filterable by status, confidence range, date range.
+
+Parameters: `page`, `limit`, `status`, `min_confidence`, `max_confidence`, `date_from`, `date_to`
+
 ---
 
 ## Frontend
@@ -591,8 +598,8 @@ Request: `{ resolved_name, entity_type }`
 - City bounding box — reject results outside city limits
 - Confidence scoring — below threshold → unresolved queue
 - Geocode caching — same street geocoded once
-- Fallback chain: cache → local Photon → Nominatim → district dictionary
-- Local Photon eliminates rate-limit bottleneck for high-volume processing
+- Fallback chain: cache → Nominatim → district dictionary
+- Geocode cache eliminates most repeated queries after warmup (80%+ hit rate expected)
 
 ### Street Renames
 
@@ -630,7 +637,7 @@ Request: `{ resolved_name, entity_type }`
 - **Two processes, shared DB:** FastAPI reads data, Worker writes data. No in-process coupling.
 - **Worker:** standalone Python script with APScheduler, runs pipeline on hourly interval
 - **Benefits:** API server stays responsive, pipeline crash doesn't kill API, independent restart/scaling
-- **Launch:** `python -m app.api` (API) + `python -m app.worker` (pipeline). Both in one `docker-compose.yml` for convenience.
+- **Launch:** `python -m app.api` (API) + `python -m app.worker` (pipeline) from `backend/`. Both in one `docker-compose.yml` for convenience.
 - **Concurrency lock:** DB-based advisory lock (`pg_try_advisory_lock`) instead of file-based lock. Benefits: auto-released on process crash (connection closes → lock released), no stale lock files, no PID cleanup logic. Job timeout: 50 minutes — if exceeded, connection is killed and lock auto-releases.
 - **Batch processing:** posts processed in batches of 100 to manage memory. Each batch wrapped in a transaction with **savepoint per post** — individual post failure rolls back only that savepoint, rest of batch commits normally. Each batch commits to DB before starting the next.
 - **Failure handling:** individual post failures don't stop the batch. Failed posts marked as `status=failed` with error details stored in `error_message` field. Retry on next cycle (max 3 retries tracked via `retry_count`, then `status=permanent_failure`). Admin can manually re-queue permanent failures via `POST /api/admin/posts/{id}/retry`.
@@ -646,7 +653,7 @@ Request: `{ resolved_name, entity_type }`
 
 ## AI Provider (Future Upgrade)
 
-Text analysis provider is abstracted behind an interface. MVP uses spaCy + rule-based system (free). When ready to invest:
+Text analysis provider is abstracted behind an interface. MVP uses rule-based system + rapidfuzz (free, no external dependencies). When ready to invest in higher accuracy:
 - Gemini Flash (cheapest cloud option)
 - OpenAI GPT-4o-mini
 - Claude Haiku
@@ -667,7 +674,7 @@ Current architecture (APScheduler + single worker) handles up to ~50k posts/day 
 | Pipeline cycle duration | > 30 min consistently | Optimize bottleneck (likely geocoding) |
 | Pipeline cycle duration | > 45 min consistently | Migrate to Celery + Redis |
 | Number of channels | > 5 | Celery with per-channel task queue |
-| Nominatim queue depth | > 200 per cycle consistently | Deploy own Nominatim instance |
+| Nominatim queue depth | > 200 per cycle consistently | Add local Photon instance as primary geocoder |
 
 Worker logs pipeline duration and queue depth per cycle. Admin stats endpoint includes these metrics for monitoring.
 
@@ -676,10 +683,11 @@ Worker logs pipeline duration and queue depth per cycle. Admin stats endpoint in
 Both Nominatim and OSRM are public APIs without SLA. Graceful degradation strategy:
 
 **Nominatim unavailable:**
-- Geocode cache + local Photon cover >95% of queries — Nominatim outage has minimal impact
+- Geocode cache covers 80%+ of queries after warmup — Nominatim outage has limited impact
 - If Nominatim returns errors/timeouts (3 consecutive failures) → skip Nominatim for remainder of cycle, fall through to district dictionary
 - Posts that needed Nominatim stay as `status = pending`, retried next cycle
 - Log warning with failure count per cycle
+- Post-MVP: add local Photon to eliminate external dependency entirely
 
 **OSRM unavailable:**
 - Route check is a user-facing feature, not pipeline-critical
