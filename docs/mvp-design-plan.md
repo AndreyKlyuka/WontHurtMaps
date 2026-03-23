@@ -18,17 +18,17 @@ System for parsing Telegram channel posts about dangerous locations in a city, e
 
 ### Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | Angular + Leaflet (OSM tiles) |
-| Backend / API | Python, FastAPI |
-| Telegram client | Telethon (MTProto) |
-| Text analysis | Rule-based + rapidfuzz fuzzy matching + city dictionaries (post-MVP: spaCy NER or LLM) |
-| Geocoding | Nominatim public API + geocode cache (post-MVP: local Photon) |
-| Routing | OSRM (free) |
-| Database | PostgreSQL + PostGIS |
-| Scheduler | APScheduler (MVP), migration-ready for Celery + Redis |
-| Auth | JWT (simple admin auth for MVP) |
+| Layer           | Technology                                                                             |
+| --------------- | -------------------------------------------------------------------------------------- |
+| Frontend        | Angular + Leaflet (OSM tiles)                                                          |
+| Backend / API   | Python, FastAPI                                                                        |
+| Telegram client | Telethon (MTProto)                                                                     |
+| Text analysis   | Rule-based + rapidfuzz fuzzy matching + city dictionaries (post-MVP: spaCy NER or LLM) |
+| Geocoding       | Nominatim public API + geocode cache (post-MVP: local Photon)                          |
+| Routing         | OSRM (free)                                                                            |
+| Database        | PostgreSQL + PostGIS                                                                   |
+| Scheduler       | APScheduler (MVP), migration-ready for Celery + Redis                                  |
+| Auth            | JWT (simple admin auth for MVP)                                                        |
 
 ### System Diagram
 
@@ -83,18 +83,21 @@ When the system is active, it processes posts from the last hour on an hourly cy
 ### Pipeline Stages
 
 **1. Telegram Fetcher**
+
 - Telethon MTProto client with dedicated account
 - Session persistence: Telethon session file stored on disk (`.session` file), auto-reloads on restart
+- **Channel identification:** channel identified by its **display title** (the name shown in the channel header). Configured via the admin panel (production) or `TELEGRAM_CHANNEL_NAME` env variable (dev override). MVP uses a hardcoded fallback name until the admin panel is implemented.
+- **Channel resolution:** on first run, the worker iterates account dialogs (`iter_dialogs()`) to find the channel by title match (case-insensitive). Works for both public and private channels the account is a member of. Once found, the numeric `channel_id` is stored in the `channel_state` DB table and reused on all subsequent pipeline cycles (fast path).
 - **Incremental fetching:** tracks `last_message_id` per channel (stored in DB). Each cycle fetches from `last_message_id + 1` to newest. Never relies on time-based "last hour" — prevents gaps and duplicates after downtime.
-- On first run (no `last_message_id`): fetches last N messages (configurable, default 1000) to bootstrap
+- On first run (no `last_message_id`): fetches last N messages (configurable, default 500) to bootstrap
 - After successful batch: updates `last_message_id` to highest fetched ID
 - Saves raw post to `posts` table with status `pending`
 - Deduplication by `telegram_id` as safety net (incremental fetch should prevent duplicates)
 - **Deleted post tracking:**
-  - Worker periodically checks for `DeletedMessage` events via Telethon
-  - Deleted posts marked with `is_deleted = true` in DB (soft-delete, data preserved)
-  - Deleted posts excluded from map display and heatmap calculations
-  - Admin panel shows deleted posts with visual indicator for transparency
+  - Each pipeline cycle: worker queries DB for up to 500 stored post IDs (ordered newest-first), then verifies them via Telethon's `get_messages(ids=[...])` in batches of 100
+  - IDs that return `None` from Telegram are soft-deleted: `is_deleted = true` in DB; all post data (including `raw_text`) is preserved
+  - Deleted posts are excluded from the public map (`GET /api/locations` filters `is_deleted = false`)
+  - Admin can view deleted posts at `GET /api/admin/posts/deleted` with full `raw_text`, `cleaned_text`, and location records — useful for auditing complex address extractions that were lost when the post was removed
 - **Telegram rate limit handling:**
   - `FloodWaitError` → respect Telegram's wait time, log warning, resume after delay
   - Fetch in small batches (100 messages per request) to avoid hitting limits
@@ -102,6 +105,7 @@ When the system is active, it processes posts from the last hour on an hourly cy
   - Auth errors → log and alert, skip cycle
 
 **2. Text Preprocessor**
+
 - Remove emoji, formatting artifacts
 - Normalize Unicode (е/ё, і/i)
 - Replace known slang from `slang_dictionary`
@@ -112,12 +116,14 @@ When the system is active, it processes posts from the last hour on an hourly cy
 Analysis priority: rule-based system first, spaCy NER only as fallback for posts where rules found nothing.
 
 **Step 1: Abbreviation normalizer**
+
 - Expand known abbreviations before any matching:
   - `"ген."` → `"генерала"`, `"пр."` → `"проспект"`, `"бульв."` → `"бульвар"`
   - `"вул."` → `"вулиця"`, `"пров."` → `"провулок"`, `"пл."` → `"площа"`
 - Configurable per-city abbreviation dictionary (JSON)
 
 **Step 2: Rule-based extractor (primary)**
+
 - Token-level fuzzy matching against city dictionaries (streets, districts, landmarks)
   - Each token and n-gram (2-3 tokens) matched via `rapidfuzz.fuzz.partial_ratio`
   - Two-tier threshold:
@@ -133,6 +139,7 @@ Analysis priority: rule-based system first, spaCy NER only as fallback for posts
   - `біля/поруч/навпроти + <landmark>` → landmark proximity
 
 **Step 3: Unrecognized token logging**
+
 - If neither Step 2 nor Step 3 found locations, extract candidate tokens (nouns, capitalized words, n-grams not in stop-list) and save to `unrecognized_tokens` table
 - Each unique token tracked with `occurrence_count` — incremented on every new post containing it
 - Admin panel shows top unrecognized tokens sorted by frequency → quick path to expanding dictionaries
@@ -143,6 +150,7 @@ Analysis priority: rule-based system first, spaCy NER only as fallback for posts
 **Unresolved criteria:** confidence < 0.4 OR no location found by either method OR multiple conflicting locations
 
 **4. Geocoder**
+
 - Check geocode cache first (same street should not be geocoded repeatedly)
 - Map old street names → new via `street_renames` table (only active renames)
 - Sequential fallback chain:
@@ -156,6 +164,7 @@ Analysis priority: rule-based system first, spaCy NER only as fallback for posts
 - Store successful results in `geocode_cache` (TTL: 90 days, refreshed on hit)
 
 **Nominatim rate-limit queue:**
+
 - In-memory queue with 1 req/sec rate limiter (token bucket)
 - During normal operation: queue is near-empty (most queries resolved by cache)
 - During bootstrap (cold cache): queue may grow — posts waiting for Nominatim are processed asynchronously, marked as `status = pending` until geocoded
@@ -166,6 +175,7 @@ Analysis priority: rule-based system first, spaCy NER only as fallback for posts
 **Post-MVP:** if Nominatim rate limit becomes a bottleneck, add local Photon instance (komoot/photon with Ukraine OSM extract) as primary geocoder. Nominatim becomes fallback.
 
 **5. Data Normalizer**
+
 - Determine geometry type based on data:
   - Exact address → Point
   - Street name (without building number) → Point (street centroid) + metadata `geo_type = street`
@@ -181,6 +191,7 @@ Analysis priority: rule-based system first, spaCy NER only as fallback for posts
 ### Adaptive Precision
 
 The system determines the best possible geocoding precision from available data:
+
 - Full address (street + building number) → exact Point
 - Street name + landmark → approximate Point (near landmark)
 - Street name only → Point at street centroid + `geo_type = street` metadata
@@ -190,6 +201,7 @@ The system determines the best possible geocoding precision from available data:
 **MVP geometry:** all locations stored as Points (except districts = Polygons). The `geo_type` metadata preserves the semantic meaning (exact/street/area/district) for future rendering upgrades. Post-MVP: street-level LineString via OSM geometry integration.
 
 **Post-MVP preparation:** locations with `geo_type = street` or `area` store normalized `street_name` separately (see `locations` schema). This enables:
+
 - Grouping multiple events on the same street for future LineString rendering
 - Direct lookup against OSM street geometries without parsing free-text `address`
 - Heatmap street-level aggregation: events on the same street contribute to one corridor intensity, not scattered points
@@ -208,7 +220,8 @@ confidence = (extraction_score * 0.5) + (geocoder_score * 0.5)
 - `geocoder_score`: 1.0 if exact match, 0.7 if partial, 0.3 if only district-level, 0.0 if failed
 
 Thresholds:
-- >= 0.7 → auto-resolved (high confidence)
+
+- > = 0.7 → auto-resolved (high confidence)
 - 0.4–0.7 → auto-resolved but flagged for review
 - < 0.4 → unresolved, sent to admin queue
 
@@ -231,6 +244,7 @@ intensity = event_count * exp(-0.03 * hours_since_last_event)
 - **No fully automatic learning.** All auto-detected mappings go through validation.
 
 **Auto-learn workflow (pending queue):**
+
 1. Analyzer extracts unknown term not in dictionary
 2. Geocoder resolves it to a location
 3. Entry is saved with `status = pending`, NOT active — it is not used for future processing yet
@@ -243,6 +257,7 @@ intensity = event_count * exp(-0.03 * hours_since_last_event)
 8. Admin-added entries (`auto_learned = false`) are always active, never auto-demoted
 
 **slang_dictionary status flow:**
+
 ```
 detected → pending (inactive, not used for matching)
               ↓ 3+ confirmations OR admin approval
@@ -268,135 +283,135 @@ detected → pending (inactive, not used for matching)
 
 ### posts
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | SERIAL PK | |
-| telegram_id | BIGINT UNIQUE | Telegram message ID, prevents duplicates |
-| channel_id | BIGINT | Telegram channel ID |
-| raw_text | TEXT | Original post text |
-| cleaned_text | TEXT | Text after preprocessing |
-| post_date | TIMESTAMPTZ | Original post date from Telegram |
-| fetched_at | TIMESTAMPTZ | When the post was fetched |
-| status | ENUM | pending, processed, failed, permanent_failure, unresolved |
-| retry_count | INT DEFAULT 0 | Number of processing retries (max 3) |
-| error_message | TEXT NULL | Last processing error details |
-| is_deleted | BOOLEAN DEFAULT FALSE | Post was deleted in Telegram |
-| city_id | FK → cities | |
+| Column        | Type                  | Description                                                                                                |
+| ------------- | --------------------- | ---------------------------------------------------------------------------------------------------------- |
+| id            | SERIAL PK             |                                                                                                            |
+| telegram_id   | BIGINT UNIQUE         | Telegram message ID, prevents duplicates                                                                   |
+| channel_id    | BIGINT                | Telegram channel ID                                                                                        |
+| raw_text      | TEXT                  | Original post text from Telegram — preserved permanently even after deletion for manual address validation |
+| cleaned_text  | TEXT                  | Text after preprocessing (emoji removed, slang replaced, Unicode normalized)                               |
+| post_date     | TIMESTAMPTZ           | Original post date from Telegram                                                                           |
+| fetched_at    | TIMESTAMPTZ           | When the post was fetched                                                                                  |
+| status        | ENUM                  | pending, processed, failed, permanent_failure, unresolved                                                  |
+| retry_count   | INT DEFAULT 0         | Number of processing retries (max 3)                                                                       |
+| error_message | TEXT NULL             | Last processing error details                                                                              |
+| is_deleted    | BOOLEAN DEFAULT FALSE | Post was deleted in Telegram                                                                               |
+| city_id       | FK → cities           |                                                                                                            |
 
 ### locations
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | SERIAL PK | |
-| post_id | FK → posts | One post can have multiple locations (1:N) |
-| geometry | GEOMETRY (PostGIS) | MVP: Point (all) or Polygon (districts only) |
-| geo_type | ENUM | point, street, area, district (semantic type, independent of geometry) |
-| address | TEXT | Resolved address text (free-form) |
-| street_name | VARCHAR NULL | Normalized street name for grouping (NULL for districts/landmarks) |
-| confidence | FLOAT | 0.0–1.0, how certain the system is |
-| out_of_bounds | BOOLEAN DEFAULT FALSE | Geocoder result was outside city bounding box |
-| resolved | BOOLEAN | Whether location was confirmed |
-| resolved_by | ENUM | auto, manual |
-| created_at | TIMESTAMPTZ | |
+| Column        | Type                  | Description                                                            |
+| ------------- | --------------------- | ---------------------------------------------------------------------- |
+| id            | SERIAL PK             |                                                                        |
+| post_id       | FK → posts            | One post can have multiple locations (1:N)                             |
+| geometry      | GEOMETRY (PostGIS)    | MVP: Point (all) or Polygon (districts only)                           |
+| geo_type      | ENUM                  | point, street, area, district (semantic type, independent of geometry) |
+| address       | TEXT                  | Resolved address text (free-form)                                      |
+| street_name   | VARCHAR NULL          | Normalized street name for grouping (NULL for districts/landmarks)     |
+| confidence    | FLOAT                 | 0.0–1.0, how certain the system is                                     |
+| out_of_bounds | BOOLEAN DEFAULT FALSE | Geocoder result was outside city bounding box                          |
+| resolved      | BOOLEAN               | Whether location was confirmed                                         |
+| resolved_by   | ENUM                  | auto, manual                                                           |
+| created_at    | TIMESTAMPTZ           |                                                                        |
 
 ### cities
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | SERIAL PK | |
-| name | VARCHAR | City name (Ukrainian) |
-| name_ru | VARCHAR | City name (Russian) |
-| bbox_north | FLOAT | Bounding box for geocoder validation |
-| bbox_south | FLOAT | |
-| bbox_east | FLOAT | |
-| bbox_west | FLOAT | |
-| default_zoom | INT | Default map zoom level |
+| Column       | Type      | Description                          |
+| ------------ | --------- | ------------------------------------ |
+| id           | SERIAL PK |                                      |
+| name         | VARCHAR   | City name (Ukrainian)                |
+| name_ru      | VARCHAR   | City name (Russian)                  |
+| bbox_north   | FLOAT     | Bounding box for geocoder validation |
+| bbox_south   | FLOAT     |                                      |
+| bbox_east    | FLOAT     |                                      |
+| bbox_west    | FLOAT     |                                      |
+| default_zoom | INT       | Default map zoom level               |
 
 ### slang_dictionary
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | SERIAL PK | |
-| city_id | FK → cities | |
-| slang | VARCHAR | Slang term or abbreviation |
-| resolved_name | VARCHAR | Full official name |
-| entity_type | ENUM | street, district, landmark |
-| status | ENUM | pending, active, rejected |
-| usage_count | INT | Times this mapping was detected |
-| auto_learned | BOOLEAN | Learned automatically vs manually added |
-| last_used_at | TIMESTAMPTZ | For 90-day demotion tracking |
+| Column        | Type        | Description                             |
+| ------------- | ----------- | --------------------------------------- |
+| id            | SERIAL PK   |                                         |
+| city_id       | FK → cities |                                         |
+| slang         | VARCHAR     | Slang term or abbreviation              |
+| resolved_name | VARCHAR     | Full official name                      |
+| entity_type   | ENUM        | street, district, landmark              |
+| status        | ENUM        | pending, active, rejected               |
+| usage_count   | INT         | Times this mapping was detected         |
+| auto_learned  | BOOLEAN     | Learned automatically vs manually added |
+| last_used_at  | TIMESTAMPTZ | For 90-day demotion tracking            |
 
 ### street_renames
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | SERIAL PK | |
-| city_id | FK → cities | |
-| old_name_uk | VARCHAR | Previous street name (Ukrainian) |
-| old_name_ru | VARCHAR | Previous street name (Russian) |
-| new_name_uk | VARCHAR | Current official name (Ukrainian) |
-| new_name_ru | VARCHAR | Current official name (Russian) |
-| year_renamed | INT | Year of renaming |
-| status | ENUM | pending, active, rejected — admin validates before system uses the rename |
+| Column       | Type        | Description                                                               |
+| ------------ | ----------- | ------------------------------------------------------------------------- |
+| id           | SERIAL PK   |                                                                           |
+| city_id      | FK → cities |                                                                           |
+| old_name_uk  | VARCHAR     | Previous street name (Ukrainian)                                          |
+| old_name_ru  | VARCHAR     | Previous street name (Russian)                                            |
+| new_name_uk  | VARCHAR     | Current official name (Ukrainian)                                         |
+| new_name_ru  | VARCHAR     | Current official name (Russian)                                           |
+| year_renamed | INT         | Year of renaming                                                          |
+| status       | ENUM        | pending, active, rejected — admin validates before system uses the rename |
 
 ### channel_state
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | SERIAL PK | |
-| city_id | FK → cities | |
-| channel_id | BIGINT | Telegram channel numeric ID (resolved from link) |
-| channel_link | VARCHAR NULL | Original link as entered by admin (t.me or web link) |
-| channel_title | VARCHAR NULL | Channel title (fetched via Telethon on add) |
-| is_active | BOOLEAN DEFAULT TRUE | Whether worker should fetch from this channel |
-| last_message_id | BIGINT | Last fetched message ID for incremental sync |
-| created_at | TIMESTAMPTZ | When the channel was added |
-| updated_at | TIMESTAMPTZ | When last_message_id was updated |
+| Column          | Type                 | Description                                          |
+| --------------- | -------------------- | ---------------------------------------------------- |
+| id              | SERIAL PK            |                                                      |
+| city_id         | FK → cities          |                                                      |
+| channel_id      | BIGINT               | Telegram channel numeric ID (resolved from link)     |
+| channel_link    | VARCHAR NULL         | Original link as entered by admin (t.me or web link) |
+| channel_title   | VARCHAR NULL         | Channel title (fetched via Telethon on add)          |
+| is_active       | BOOLEAN DEFAULT TRUE | Whether worker should fetch from this channel        |
+| last_message_id | BIGINT               | Last fetched message ID for incremental sync         |
+| created_at      | TIMESTAMPTZ          | When the channel was added                           |
+| updated_at      | TIMESTAMPTZ          | When last_message_id was updated                     |
 
 ### geocode_cache
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | SERIAL PK | |
-| city_id | FK → cities | |
-| query | VARCHAR | Geocoding query string |
-| result_lat | FLOAT | |
-| result_lng | FLOAT | |
-| result_type | VARCHAR | Nominatim result type |
-| created_at | TIMESTAMPTZ | |
-| hit_count | INT | Number of cache hits |
+| Column      | Type        | Description            |
+| ----------- | ----------- | ---------------------- |
+| id          | SERIAL PK   |                        |
+| city_id     | FK → cities |                        |
+| query       | VARCHAR     | Geocoding query string |
+| result_lat  | FLOAT       |                        |
+| result_lng  | FLOAT       |                        |
+| result_type | VARCHAR     | Nominatim result type  |
+| created_at  | TIMESTAMPTZ |                        |
+| hit_count   | INT         | Number of cache hits   |
 
 ### districts
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | SERIAL PK | |
-| city_id | FK → cities | |
-| name | VARCHAR | District name (Ukrainian) |
-| name_ru | VARCHAR | District name (Russian) |
-| polygon | GEOMETRY(POLYGON) | District boundary |
+| Column  | Type              | Description               |
+| ------- | ----------------- | ------------------------- |
+| id      | SERIAL PK         |                           |
+| city_id | FK → cities       |                           |
+| name    | VARCHAR           | District name (Ukrainian) |
+| name_ru | VARCHAR           | District name (Russian)   |
+| polygon | GEOMETRY(POLYGON) | District boundary         |
 
 ### unrecognized_tokens
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | SERIAL PK | |
-| city_id | FK → cities | |
-| token | VARCHAR | Unrecognized token or n-gram |
+| Column           | Type          | Description                         |
+| ---------------- | ------------- | ----------------------------------- |
+| id               | SERIAL PK     |                                     |
+| city_id          | FK → cities   |                                     |
+| token            | VARCHAR       | Unrecognized token or n-gram        |
 | occurrence_count | INT DEFAULT 1 | How many posts contained this token |
-| sample_post_ids | BIGINT[] | Up to 5 post IDs for admin context |
-| first_seen_at | TIMESTAMPTZ | |
-| last_seen_at | TIMESTAMPTZ | |
+| sample_post_ids  | BIGINT[]      | Up to 5 post IDs for admin context  |
+| first_seen_at    | TIMESTAMPTZ   |                                     |
+| last_seen_at     | TIMESTAMPTZ   |                                     |
 
 ### worker_heartbeat
 
-| Column | Type | Description |
-|--------|------|-------------|
-| id | SERIAL PK | |
-| heartbeat_at | TIMESTAMPTZ | Last heartbeat timestamp |
-| status | VARCHAR | idle, running, error |
-| current_job | VARCHAR NULL | Description of current activity |
-| posts_processed | INT | Posts processed in current/last cycle |
+| Column          | Type         | Description                           |
+| --------------- | ------------ | ------------------------------------- |
+| id              | SERIAL PK    |                                       |
+| heartbeat_at    | TIMESTAMPTZ  | Last heartbeat timestamp              |
+| status          | VARCHAR      | idle, running, error                  |
+| current_job     | VARCHAR NULL | Description of current activity       |
+| posts_processed | INT          | Posts processed in current/last cycle |
 
 ---
 
@@ -419,12 +434,18 @@ Parameters: `bbox` (required), `date_from`, `date_to`, `city_id`, `zoom` (determ
 Parameters: `from_lat`, `from_lng`, `to_lat`, `to_lng`, `relevance_hours`, `city_id`, `buffer_meters` (optional, default 50)
 
 Response:
+
 ```json
 {
   "route": "GeoJSON LineString",
   "warnings": [
     {
-      "location": { "lat": 46.47, "lng": 30.73, "address": "вул. Генуезька", "geo_type": "street" },
+      "location": {
+        "lat": 46.47,
+        "lng": 30.73,
+        "address": "вул. Генуезька",
+        "geo_type": "street"
+      },
       "events_count": 3,
       "last_event": "2026-03-22T12:00:00Z",
       "confidence": 0.85
@@ -501,6 +522,10 @@ Request: `{ resolved_name, entity_type }`
 Request: `{ channel_link, city_id }`
 
 **`POST /api/admin/channel/{id}/toggle`** — Enable/disable channel fetching. Sets `is_active` flag.
+
+**`GET /api/admin/posts/deleted`** — Paginated list of posts that were deleted from Telegram. Each post includes `raw_text`, `cleaned_text`, `post_date`, `status`, and associated location records. Allows admin to audit what address information was contained in removed posts and validate complex extractions manually.
+
+Parameters: `page`, `limit`
 
 **`GET /api/admin/processing-log`** — Paginated feed of all processed posts with full decision chain: extraction method, matched street, rename applied, geocode result, confidence breakdown. Filterable by status, confidence range, date range.
 
@@ -654,6 +679,7 @@ Parameters: `page`, `limit`, `status`, `min_confidence`, `max_confidence`, `date
 ## AI Provider (Future Upgrade)
 
 Text analysis provider is abstracted behind an interface. MVP uses rule-based system + rapidfuzz (free, no external dependencies). When ready to invest in higher accuracy:
+
 - Gemini Flash (cheapest cloud option)
 - OpenAI GPT-4o-mini
 - Claude Haiku
@@ -669,12 +695,12 @@ Switch requires only configuration change, no pipeline modifications.
 
 Current architecture (APScheduler + single worker) handles up to ~50k posts/day comfortably. Migration triggers:
 
-| Signal | Threshold | Action |
-|--------|-----------|--------|
-| Pipeline cycle duration | > 30 min consistently | Optimize bottleneck (likely geocoding) |
-| Pipeline cycle duration | > 45 min consistently | Migrate to Celery + Redis |
-| Number of channels | > 5 | Celery with per-channel task queue |
-| Nominatim queue depth | > 200 per cycle consistently | Add local Photon instance as primary geocoder |
+| Signal                  | Threshold                    | Action                                        |
+| ----------------------- | ---------------------------- | --------------------------------------------- |
+| Pipeline cycle duration | > 30 min consistently        | Optimize bottleneck (likely geocoding)        |
+| Pipeline cycle duration | > 45 min consistently        | Migrate to Celery + Redis                     |
+| Number of channels      | > 5                          | Celery with per-channel task queue            |
+| Nominatim queue depth   | > 200 per cycle consistently | Add local Photon instance as primary geocoder |
 
 Worker logs pipeline duration and queue depth per cycle. Admin stats endpoint includes these metrics for monitoring.
 
@@ -683,6 +709,7 @@ Worker logs pipeline duration and queue depth per cycle. Admin stats endpoint in
 Both Nominatim and OSRM are public APIs without SLA. Graceful degradation strategy:
 
 **Nominatim unavailable:**
+
 - Geocode cache covers 80%+ of queries after warmup — Nominatim outage has limited impact
 - If Nominatim returns errors/timeouts (3 consecutive failures) → skip Nominatim for remainder of cycle, fall through to district dictionary
 - Posts that needed Nominatim stay as `status = pending`, retried next cycle
@@ -690,6 +717,7 @@ Both Nominatim and OSRM are public APIs without SLA. Graceful degradation strate
 - Post-MVP: add local Photon to eliminate external dependency entirely
 
 **OSRM unavailable:**
+
 - Route check is a user-facing feature, not pipeline-critical
 - If OSRM returns error/timeout (5 sec) → return `{ "error": "routing_unavailable", "message": "..." }` with HTTP 503
 - Frontend shows user-friendly message: "Route check temporarily unavailable, try again later"
@@ -700,6 +728,7 @@ Both Nominatim and OSRM are public APIs without SLA. Graceful degradation strate
 Admin panel organizes statuses into **action-oriented sections**, not raw status lists:
 
 **Dashboard home (`/admin`):**
+
 - **Needs attention** (red count): unresolved posts + permanent_failure posts + high-frequency unrecognized tokens (occurrence_count ≥ 10)
 - **Pending review** (yellow count): pending slang entries + flagged locations (confidence 0.4–0.7) + out_of_bounds locations
 - **System health** (green/yellow/red): worker status, last pipeline time, Nominatim availability

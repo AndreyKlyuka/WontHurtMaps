@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Absolute path to the backend/ directory — used to resolve relative session paths
+# regardless of the working directory the process was started from.
+_BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+
+# .env lives in the project root (one level above backend/).
+_ENV_FILE = _BACKEND_DIR.parent / ".env"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -16,7 +25,9 @@ class Settings(BaseSettings):
     # Telegram
     telegram_api_id: int = 0
     telegram_api_hash: str = ""
-    telegram_channel_link: str = ""
+    telegram_channel_name: str = ""
+    telegram_session_path: str = "sessions/telegram.session"
+    telegram_bootstrap_limit: int = 500
 
     # Auth
     jwt_secret: str = "changeme"
@@ -29,6 +40,18 @@ class Settings(BaseSettings):
     # Stored as plain string to avoid pydantic-settings JSON-decoding a list field.
     # Use settings.cors_origins_list for the parsed form.
     cors_origins: str = "http://localhost:4200"
+
+    @property
+    def telegram_session_path_resolved(self) -> Path:
+        """Return an absolute Path to the session file.
+
+        If ``telegram_session_path`` is already absolute it is used as-is.
+        Otherwise it is resolved relative to the backend/ directory so the
+        path is stable regardless of the working directory the process was
+        started from.
+        """
+        p = Path(self.telegram_session_path)
+        return p if p.is_absolute() else _BACKEND_DIR / p
 
     @property
     def cors_origins_list(self) -> list[str]:

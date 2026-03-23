@@ -1,4 +1,4 @@
-# WontHurtMaps — Implementation Plan
+і# WontHurtMaps — Implementation Plan
 
 ## Overview
 
@@ -172,7 +172,7 @@ TELEGRAM_API_ID=12345678
 TELEGRAM_API_HASH=your_api_hash_here
 
 # Telegram channel (dev-only fallback, production uses admin panel)
-TELEGRAM_CHANNEL_LINK=
+TELEGRAM_CHANNEL_NAME=
 
 # Auth
 JWT_SECRET=changeme_generate_random_string
@@ -249,51 +249,53 @@ Docker-compose up brings all services online. API responds to health check. Fron
 
 ---
 
-## Phase 1: Telegram Fetcher & Data Ingestion
+## Phase 1: Telegram Fetcher & Data Ingestion ✅ DONE
 
 **Goal:** Fetch posts from Telegram channel and store them in the database.
 
 ### 1.1 Telegram Client
 
-- [ ] Telethon client with session persistence
-- [ ] Configuration: API ID, API Hash via ENV
-- [ ] `scripts/telegram_auth.py` — interactive CLI script for first-time auth (phone → code → optional 2FA)
-- [ ] Session file stored in `sessions/` directory (git-ignored, Docker volume in production)
-- [ ] Worker reads session from `sessions/telegram.session` on startup
-- [ ] Auth error handling: log warning, worker enters idle mode until session is fixed
+- [x] Telethon client with session persistence
+- [x] Configuration: API ID, API Hash via ENV
+- [x] `scripts/telegram_auth.py` — interactive CLI script for first-time auth (phone → code → optional 2FA)
+- [x] Session file stored in `sessions/` directory (git-ignored, Docker volume in production)
+- [x] Worker reads session from `sessions/telegram.session` on startup
+- [x] Auth error handling: log warning, worker enters idle mode until session is fixed
 
 ### 1.2 Channel Resolution
 
-- [ ] Worker reads active channel from `channel_state` table
-- [ ] Dev fallback: if no channel in DB, read `TELEGRAM_CHANNEL_LINK` from ENV
-- [ ] If neither DB nor ENV has channel — worker starts in idle mode, logs warning
-- [ ] Channel link resolution: parse t.me / web.telegram.org links → extract numeric channel_id via Telethon
+- [x] Worker reads active channel from `channel_state` table (fast path)
+- [x] Dev fallback: three-step priority — DB → `TELEGRAM_CHANNEL_NAME` env override → hardcoded `_FALLBACK_CHANNEL_NAME = "Не повредит, Одесса"`
+- [x] If no channel resolved — worker starts in idle mode, logs warning
+- [x] Channel resolved by **display title** via `iter_dialogs()` (case-insensitive match); works for public and private channels the account is subscribed to
+- [x] Resolved `channel_id` persisted to `channel_state` DB — subsequent cycles use the DB fast path
 
 ### 1.3 Fetcher Service
 
-- [ ] Incremental fetching: `last_message_id` from `channel_state`
-- [ ] Bootstrap mode: fetch last N messages on first run
-- [ ] Batch fetching (100 messages per request)
-- [ ] Deduplication by `telegram_id`
-- [ ] Rate limit handling: `FloodWaitError` → wait + retry
-- [ ] Exponential backoff on network errors (3 attempts)
-- [ ] Save raw post to `posts` table with status `pending`
+- [x] Incremental fetching: `last_message_id` from `channel_state`
+- [x] Bootstrap mode: fetch last N messages on first run (`telegram_bootstrap_limit=500`)
+- [x] Batch fetching via `iter_messages`
+- [x] Deduplication by `telegram_id` (ON CONFLICT DO NOTHING)
+- [x] Rate limit handling: `FloodWaitError` → wait + retry (capped at 300s)
+- [x] Exponential backoff on network errors (3 attempts, base 5s)
+- [x] Save raw post to `posts` table with status `pending`
 
 ### 1.4 Deleted Post Tracking
 
-- [ ] Handle `DeletedMessage` events
-- [ ] Soft-delete: `is_deleted = true`
+- [x] `DeletedPostsTracker` service — batched verification against Telegram
+- [x] Soft-delete: `is_deleted = true`
+- [x] Runs unconditionally each cycle (not only when new posts are fetched)
 
 ### 1.5 Worker Integration
 
-- [ ] APScheduler: hourly job
-- [ ] Advisory lock (`pg_try_advisory_lock`) to prevent parallel execution
-- [ ] Heartbeat: write to `worker_heartbeat` every 60 seconds
-- [ ] Job timeout: 50 minutes
+- [x] APScheduler: hourly job via `AsyncIOScheduler` (started within `asyncio.run()`)
+- [x] Transaction-level advisory lock (`pg_try_advisory_xact_lock`) — auto-releases on commit
+- [x] Heartbeat: upsert to `worker_heartbeat` at cycle start and end
+- [x] Graceful shutdown on SIGINT/SIGTERM via `asyncio.Event`
 
 ### Deliverable
 
-Worker starts, connects to Telegram, fetches posts into DB. On restart, resumes from last message. Heartbeat written to DB.
+Worker starts, connects to Telegram, fetches 499 posts into DB on bootstrap. On restart, resumes from `last_message_id=410396`. Heartbeat row updated. All ruff + mypy checks pass.
 
 ---
 
