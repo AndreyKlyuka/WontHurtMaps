@@ -17,3 +17,9 @@ class NotFoundError(AppError):
 class GeocodingError(AppError):
     def __init__(self, address: str) -> None:
         super().__init__(f"Failed to geocode: {address}", "GEOCODING_FAILED", 502)
+
+
+class TelegramAuthError(AppError):
+    def __init__(self, detail: str = "") -> None:
+        message = f"Telegram authentication failed: {detail}" if detail else "Telegram authentication failed"
+        super().__init__(message, "TELEGRAM_AUTH_FAILED", 503)
