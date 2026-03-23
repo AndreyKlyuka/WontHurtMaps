@@ -1,0 +1,23 @@
+{
+  "name": "wonthurtmaps",
+  "private": true,
+  "scripts": {
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.1"
+  },
+  "lint-staged": {
+    "frontend/**/*.{ts,html}": [
+      "bash -c 'cd frontend && npx eslint --fix \"$@\"' _"
+    ],
+    "**/*.{ts,html,scss,json,md,yaml}": [
+      "npx --prefix frontend prettier --write"
+    ],
+    "*.py": [
+      "bash -c 'cd backend && uv run ruff check --fix \"$@\"' _",
+      "bash -c 'cd backend && uv run ruff format \"$@\"' _"
+    ]
+  }
+}

@@ -1,0 +1,82 @@
+services:
+  db:
+    image: postgis/postgis:17-3.5
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-wonthurtmaps}
+      POSTGRES_USER: ${POSTGRES_USER:-wonthurt}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wonthurt} -d ${POSTGRES_DB:-wonthurtmaps}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: ../docker/backend.Dockerfile
+    command: alembic upgrade head
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-wonthurt}:${POSTGRES_PASSWORD:-changeme}@db:5432/${POSTGRES_DB:-wonthurtmaps}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:4200}
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: ../docker/backend.Dockerfile
+    command: uvicorn app.api.main:app --host 0.0.0.0 --port 8000
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-wonthurt}:${POSTGRES_PASSWORD:-changeme}@db:5432/${POSTGRES_DB:-wonthurtmaps}
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:-0}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
+      JWT_SECRET: ${JWT_SECRET:-changeme}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:4200}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme}
+    ports:
+      - "8000:8000"
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: ../docker/backend.Dockerfile
+    command: python -m app.worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-wonthurt}:${POSTGRES_PASSWORD:-changeme}@db:5432/${POSTGRES_DB:-wonthurtmaps}
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:-0}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
+      TELEGRAM_CHANNEL_LINK: ${TELEGRAM_CHANNEL_LINK:-}
+      PIPELINE_INTERVAL_MINUTES: ${PIPELINE_INTERVAL_MINUTES:-60}
+      NOMINATIM_RATE_LIMIT: ${NOMINATIM_RATE_LIMIT:-1.0}
+      NOMINATIM_QUEUE_MAX: ${NOMINATIM_QUEUE_MAX:-500}
+    volumes:
+      - telegram_sessions:/app/sessions
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  telegram_sessions:

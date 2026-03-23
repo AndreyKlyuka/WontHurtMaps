@@ -4,3 +4,36 @@
 node_modules/
 dist/
 .env
+
+# Python
+__pycache__/
+*.py[cod]
+**/*.egg-info/
+**/.venv/
+.mypy_cache/
+.ruff_cache/
+
+# Sessions
+sessions/
+*.session
+
+# Seed data (generated)
+data/seed/streets.json
+data/seed/districts.json
+data/seed/street_renames.json
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+
+# Docker
+pgdata/
+
+# OS
+.DS_Store
+Thumbs.db
+*.stackdump
+
+# Plugins
+docs/superpowers/
