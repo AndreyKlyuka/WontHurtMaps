@@ -57,10 +57,18 @@ class Settings(BaseSettings):
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()] or ["http://localhost:4200"]
 
+    # Google Gemini (LLM extraction)
+    gemini_api_key: str = ""
+    llm_queue_max: int = 500
+    llm_max_consecutive_failures: int = 3
+
+    # Google Maps Geocoding
+    google_maps_api_key: str = ""
+    geocoding_queue_max: int = 500
+    geocoding_max_consecutive_failures: int = 3
+
     # Worker
     pipeline_interval_minutes: int = 60
-    nominatim_rate_limit: float = 1.0
-    nominatim_queue_max: int = 500
 
     @property
     def sync_database_url(self) -> str:

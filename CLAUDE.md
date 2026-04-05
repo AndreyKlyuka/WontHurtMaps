@@ -39,12 +39,12 @@ City safety monitoring system: parses Telegram channel posts about dangerous loc
 
 Monorepo, two processes, shared PostgreSQL+PostGIS DB:
 
-| Component | Stack | Role |
-|-----------|-------|------|
-| **API** | Python 3.12 / FastAPI | REST endpoints (read-heavy) |
-| **Worker** | Python 3.12 / APScheduler | Hourly pipeline (write-heavy) |
-| **Frontend** | Angular 21 | Leaflet map + admin panel |
-| **Scripts** | Python | Seed data (OSM), Telegram auth |
+| Component    | Stack                     | Role                           |
+| ------------ | ------------------------- | ------------------------------ |
+| **API**      | Python 3.12 / FastAPI     | REST endpoints (read-heavy)    |
+| **Worker**   | Python 3.12 / APScheduler | Hourly pipeline (write-heavy)  |
+| **Frontend** | Angular 21                | Leaflet map + admin panel      |
+| **Scripts**  | Python                    | Seed data (OSM), Telegram auth |
 
 No in-process coupling — independent restart/scaling. Docker Compose as single deployment unit.
 
@@ -123,34 +123,35 @@ ng lint                               # ESLint + Prettier
 ## Key Design Decisions (MVP)
 
 - No tests — manual verification; testing deferred to post-MVP
-- Rule-based NLP only (rapidfuzz + city dictionaries); spaCy NER deferred
-- Nominatim public API as sole geocoder; local Photon deferred
+- LLM-based address extraction via Gemini free tier (15 RPM, Pydantic-validated output); local models deferred
+- Google Maps Geocoding API as sole geocoder; local Photon deferred to post-MVP
 - APScheduler for scheduling; Celery+Redis deferred (migration-ready)
 - Single admin account via JWT; multi-user auth deferred
 
 ## Rules (auto-loaded from `.claude/rules/`)
 
-| Rule File | Scope |
-|-----------|-------|
-| `architecture.md` | Layering, database, security, performance |
-| `code-style.md` | Python/TypeScript style, Angular, anti-patterns |
-| `git-operations.md` | Commits, branches, hooks, PR descriptions |
-| `workflow.md` | Agent pipeline, data pipeline, bug fixes |
+| Rule File           | Scope                                           |
+| ------------------- | ----------------------------------------------- |
+| `architecture.md`   | Layering, database, security, performance       |
+| `code-style.md`     | Python/TypeScript style, Angular, anti-patterns |
+| `git-operations.md` | Commits, branches, hooks, PR descriptions       |
+| `workflow.md`       | Agent pipeline, data pipeline, bug fixes        |
 
 ## Agents (from `.claude/agents/`)
 
-| Agent | Model | Trigger |
-|-------|-------|---------|
-| `business-analyst` | opus | Requirements engineering, feature planning, task decomposition, MVP scope evaluation |
-| `ddd-architect` | opus | Domain model design, bounded contexts, business logic placement decisions |
-| `developer` | sonnet | Full-stack features (FastAPI + Angular), pipeline/worker logic, batch processing |
-| `frontend-angular` | sonnet | Frontend-only: Angular components, Leaflet map, SCSS, signals, responsive design |
-| `dba` | sonnet | Schema design, Alembic migrations, query optimization, PostGIS, seed data |
-| `integration-architect` | sonnet | External APIs (Telegram, Nominatim, OSM), retry/backoff, webhook handlers |
-| `debugger` | sonnet | Bug investigation, stack traces, error diagnosis, root cause analysis |
-| `code-reviewer` | sonnet | Code review, architecture audit, security check, convention compliance (read-only) |
+| Agent                   | Model  | Trigger                                                                                    |
+| ----------------------- | ------ | ------------------------------------------------------------------------------------------ |
+| `business-analyst`      | opus   | Requirements engineering, feature planning, task decomposition, MVP scope evaluation       |
+| `ddd-architect`         | opus   | Domain model design, bounded contexts, business logic placement decisions                  |
+| `developer`             | sonnet | Full-stack features (FastAPI + Angular), pipeline/worker logic, batch processing           |
+| `frontend-angular`      | sonnet | Frontend-only: Angular components, Leaflet map, SCSS, signals, responsive design           |
+| `dba`                   | sonnet | Schema design, Alembic migrations, query optimization, PostGIS, seed data                  |
+| `integration-architect` | sonnet | External APIs (Telegram, Google Maps, Google Gemini, OSM), retry/backoff, webhook handlers |
+| `debugger`              | sonnet | Bug investigation, stack traces, error diagnosis, root cause analysis                      |
+| `code-reviewer`         | sonnet | Code review, architecture audit, security check, convention compliance (read-only)         |
 
 **Code review workflow:**
+
 - `code-reviewer` agent — on-demand reviews ("review my changes", "check this code")
 - `superpowers:requesting-code-review` skill — completion verification before merge/PR
 - `superpowers:receiving-code-review` skill — when processing review feedback

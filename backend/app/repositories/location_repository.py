@@ -73,3 +73,10 @@ class LocationRepository:
             channel_id,
         )
         return locations
+
+    async def bulk_save_locations(self, locations: list[Location]) -> int:
+        """Add locations to session, flush, return count."""
+        self._session.add_all(locations)
+        await self._session.flush()
+        logger.debug("bulk_save_locations: saved %d locations", len(locations))
+        return len(locations)

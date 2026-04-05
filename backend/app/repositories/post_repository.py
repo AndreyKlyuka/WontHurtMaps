@@ -113,3 +113,44 @@ class PostRepository:
         posts = list(result.scalars().all())
         logger.debug("get_pending_posts: fetched %d posts (limit=%d)", len(posts), limit)
         return posts
+
+    async def update_post_status(
+        self,
+        post_id: int,
+        status: str,
+        error_message: str | None = None,
+    ) -> None:
+        """Update post status. Increment retry_count if status is 'failed'."""
+        values: dict = {"status": status, "error_message": error_message}
+        if status == "failed":
+            values["retry_count"] = Post.retry_count + 1
+
+        stmt = update(Post).where(Post.id == post_id).values(**values)
+        await self._session.execute(stmt)
+        await self._session.flush()
+        logger.debug(
+            "update_post_status: post_id=%d status=%r",
+            post_id,
+            status,
+        )
+
+    async def get_retryable_posts(self, limit: int = 100) -> list[Post]:
+        """Fetch posts with status='failed' and retry_count < 3."""
+        stmt = (
+            select(Post)
+            .where(
+                Post.status == "failed",
+                Post.retry_count < 3,
+                Post.is_deleted.is_(False),
+            )
+            .order_by(Post.post_date)
+            .limit(limit)
+        )
+        result = await self._session.execute(stmt)
+        posts = list(result.scalars().all())
+        logger.debug(
+            "get_retryable_posts: fetched %d posts (limit=%d)",
+            len(posts),
+            limit,
+        )
+        return posts

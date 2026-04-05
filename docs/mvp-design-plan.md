@@ -18,17 +18,17 @@ System for parsing Telegram channel posts about dangerous locations in a city, e
 
 ### Stack
 
-| Layer           | Technology                                                                             |
-| --------------- | -------------------------------------------------------------------------------------- |
-| Frontend        | Angular + Leaflet (OSM tiles)                                                          |
-| Backend / API   | Python, FastAPI                                                                        |
-| Telegram client | Telethon (MTProto)                                                                     |
-| Text analysis   | Rule-based + rapidfuzz fuzzy matching + city dictionaries (post-MVP: spaCy NER or LLM) |
-| Geocoding       | Nominatim public API + geocode cache (post-MVP: local Photon)                          |
-| Routing         | OSRM (free)                                                                            |
-| Database        | PostgreSQL + PostGIS                                                                   |
-| Scheduler       | APScheduler (MVP), migration-ready for Celery + Redis                                  |
-| Auth            | JWT (simple admin auth for MVP)                                                        |
+| Layer           | Technology                                                                               |
+| --------------- | ---------------------------------------------------------------------------------------- |
+| Frontend        | Angular + Leaflet (OSM tiles)                                                            |
+| Backend / API   | Python, FastAPI                                                                          |
+| Telegram client | Telethon (MTProto)                                                                       |
+| Text analysis   | LLM API (Gemini free tier) for structured address extraction; Pydantic output validation |
+| Geocoding       | Google Maps Geocoding API + geocode cache (DB-based, 90-day TTL)                         |
+| Routing         | OSRM (free)                                                                              |
+| Database        | PostgreSQL + PostGIS                                                                     |
+| Scheduler       | APScheduler (MVP), migration-ready for Celery + Redis                                    |
+| Auth            | JWT (simple admin auth for MVP)                                                          |
 
 ### System Diagram
 
@@ -108,46 +108,95 @@ When the system is active, it processes posts from the last hour on an hourly cy
 
 - Remove emoji, formatting artifacts
 - Normalize Unicode (е/ё, і/i)
-- Replace known slang from `slang_dictionary`
 - Clean text stored as `cleaned_text`
 
-**3. Location Analyzer (rule-based primary, NER secondary)**
+> Slang replacement is intentionally omitted: the LLM handles colloquial names and mixed Ukrainian/Russian text via prompt context and dynamic few-shot examples (see section 3).
 
-Analysis priority: rule-based system first, spaCy NER only as fallback for posts where rules found nothing.
+**3. Location Analyzer (LLM-based)**
 
-**Step 1: Abbreviation normalizer**
+Extracts addresses, intersections, and directional references from post text using an LLM API (Gemini free tier). The LLM understands natural language patterns that rule-based systems struggle with: street intersections, directions along streets, approximate landmarks, and mixed Ukrainian/Russian text.
 
-- Expand known abbreviations before any matching:
-  - `"ген."` → `"генерала"`, `"пр."` → `"проспект"`, `"бульв."` → `"бульвар"`
-  - `"вул."` → `"вулиця"`, `"пров."` → `"провулок"`, `"пл."` → `"площа"`
-- Configurable per-city abbreviation dictionary (JSON)
+**Input:** `cleaned_text` from preprocessor + city context (name, city hint)
 
-**Step 2: Rule-based extractor (primary)**
+**LLM request:**
 
-- Token-level fuzzy matching against city dictionaries (streets, districts, landmarks)
-  - Each token and n-gram (2-3 tokens) matched via `rapidfuzz.fuzz.partial_ratio`
-  - Two-tier threshold:
-    - **≥ 90%** → high-confidence match, full extraction_score
-    - **80–89%** → candidate match with confidence penalty (× 0.8). If multiple candidates in this range — disambiguate by context (nearby district/landmark tokens) or mark as ambiguous (lowest-scoring candidate wins only if no alternatives)
-    - **< 80%** → no match
-  - Example: "тиирова" → "Таїрова" (fuzzy), "7км" → "7-й кілометр" (alias dict)
-- Pattern-based extraction:
-  - `<street_name> + <number>` → exact address
-  - `<street_name> + <landmark>` → approximate address
-  - `<district_name>` → district area
-  - `район/мікрорайон + <name>` → district
-  - `біля/поруч/навпроти + <landmark>` → landmark proximity
+- Single API call per post with a structured prompt
+- Prompt instructs the model to extract: exact addresses, street intersections, directional references, district/area names
+- City context passed in the system prompt to guide disambiguation
+- **Dynamic few-shot examples:** 3 real verified posts from the same channel are attached to each prompt (see Few-Shot Pool below)
 
-**Step 3: Unrecognized token logging**
+**Expected structured output (JSON):**
 
-- If neither Step 2 nor Step 3 found locations, extract candidate tokens (nouns, capitalized words, n-grams not in stop-list) and save to `unrecognized_tokens` table
-- Each unique token tracked with `occurrence_count` — incremented on every new post containing it
-- Admin panel shows top unrecognized tokens sorted by frequency → quick path to expanding dictionaries
-- Tokens that admin adds to slang_dictionary or street dictionary are auto-removed from unrecognized list
+```json
+{
+  "locations": [
+    {
+      "type": "address",
+      "value": "вул. Дерибасівська, 5",
+      "confidence": 0.95
+    },
+    {
+      "type": "intersection",
+      "value": "Дерибасівська / Рішельєвська",
+      "confidence": 0.88
+    },
+    {
+      "type": "direction",
+      "value": "вздовж Фонтанської від Люстдорфської",
+      "confidence": 0.75
+    },
+    {
+      "type": "district",
+      "value": "Таїрова",
+      "confidence": 0.9
+    }
+  ]
+}
+```
 
-**Output:** `location_type` (exact/street/area/district), `address`, `landmarks`, `confidence`
+**Output validation:**
 
-**Unresolved criteria:** confidence < 0.4 OR no location found by either method OR multiple conflicting locations
+- LLM response parsed and validated via Pydantic model
+- Invalid or malformed JSON → retry once → mark post as `unresolved` if still fails
+- Empty `locations` array → mark as `unresolved`, log for admin review
+
+**Rate limiting (Gemini free tier):**
+
+- 15 RPM limit respected via in-process token bucket (same pattern as geocoder queue)
+- Queue overflow protection: if queue exceeds 500 items, remaining posts stay `status = pending` until next cycle
+
+**Fallback on API failure:**
+
+- LLM API unavailable or returns error → mark post as `failed`, `retry_count++`
+- 3 consecutive LLM failures → skip LLM for remainder of cycle, all pending posts stay `status = pending`
+
+**Unrecognized address logging:**
+
+- If LLM returns locations but Geocoder cannot resolve any of them → save unresolved address strings to `unrecognized_tokens` table
+- Each unique address tracked with `occurrence_count` — helps admin identify frequently mentioned locations that need manual geocoding or dictionary additions
+- Admin panel shows top unresolved addresses sorted by frequency
+
+**Output:** `location_type` (address/intersection/direction/district), `address`, `confidence`
+
+**Unresolved criteria:** LLM returns empty locations OR Pydantic validation fails OR all extracted locations fail geocoding
+
+**Few-Shot Pool:**
+
+The prompt includes 3 real examples drawn once per pipeline cycle (all posts in a batch share the same 3 examples). An example is eligible when:
+
+- `confidence >= 0.95` (LLM + geocoder combined score) AND
+- `admin_verified = true` (admin explicitly confirmed the location)
+
+After admin verification, confidence is treated as 1.0 regardless of the original score.
+
+**Bootstrap fallback:** if the verified pool has fewer than 3 entries, static hardcoded examples from real Odesa posts are used instead.
+
+```sql
+SELECT l.*, p.raw_text FROM locations l
+JOIN posts p ON p.id = l.post_id
+WHERE l.confidence >= 0.95 AND l.admin_verified = true
+ORDER BY RANDOM() LIMIT 3
+```
 
 **4. Geocoder**
 
@@ -155,7 +204,7 @@ Analysis priority: rule-based system first, spaCy NER only as fallback for posts
 - Map old street names → new via `street_renames` table (only active renames)
 - Sequential fallback chain:
   1. Geocode cache lookup
-  2. Nominatim public API (rate-limited, 1 req/sec — see below)
+  2. Google Maps Geocoding API
   3. District dictionary with fixed coordinates/polygons
 - **Bounding box validation:** if geocoder result is outside city bbox:
   - Do NOT reject immediately — try next fallback in chain
@@ -163,16 +212,14 @@ Analysis priority: rule-based system first, spaCy NER only as fallback for posts
 - If all fallbacks fail entirely (no result) → mark as unresolved with confidence 0.0
 - Store successful results in `geocode_cache` (TTL: 90 days, refreshed on hit)
 
-**Nominatim rate-limit queue:**
+**Google Maps Geocoding API:**
 
-- In-memory queue with 1 req/sec rate limiter (token bucket)
-- During normal operation: queue is near-empty (most queries resolved by cache)
-- During bootstrap (cold cache): queue may grow — posts waiting for Nominatim are processed asynchronously, marked as `status = pending` until geocoded
-- Queue overflow protection: if queue exceeds 500 items, remaining posts stay as `status = pending` and are retried on next pipeline cycle
+- No strict per-second rate limit (up to 50 QPS); queue kept for overflow protection only
+- Queue overflow protection: if queue exceeds 500 items, remaining posts stay `status = pending` and are retried on next cycle
 - Metrics: log queue depth per cycle for monitoring
-- If Nominatim returns errors/timeouts (3 consecutive failures) → skip for remainder of cycle
-
-**Post-MVP:** if Nominatim rate limit becomes a bottleneck, add local Photon instance (komoot/photon with Ukraine OSM extract) as primary geocoder. Nominatim becomes fallback.
+- 3 consecutive API failures → skip for remainder of cycle
+- Billing: $200/month free credit (~40k requests); with 90-day cache hit rate ~80%, expected volume well within free tier
+- API key configured via `GOOGLE_MAPS_API_KEY` env var (Google Maps Platform — separate from Gemini key)
 
 **5. Data Normalizer**
 
@@ -184,7 +231,7 @@ Analysis priority: rule-based system first, spaCy NER only as fallback for posts
   - Multiple locations in one post → multiple Points
 - **MVP simplification:** all locations except districts are stored as Points with metadata. Street LineString rendering deferred to post-MVP (requires OSM geometry integration).
 - Assign final confidence level
-- Track new slang candidates: if unknown term resolved to known location, save to `slang_dictionary` with `status = pending`
+- Set `admin_verified = false` by default on all new locations (admin verifies via admin panel)
 - Save to `locations` table
 - Low confidence → mark post as `unresolved`
 
@@ -215,8 +262,8 @@ confidence = (extraction_score * 0.5) + (geocoder_score * 0.5)
 ```
 
 - `extraction_score`:
-  - Rule-based match: `rapidfuzz_score / 100` (e.g., 0.92 for 92% token match)
-  - Fuzzy match 80-89%: penalty (× 0.8)
+  - LLM-reported confidence for the extracted location (0.0–1.0 from structured output)
+  - If LLM returns no confidence → use 0.5 as default for present extractions
 - `geocoder_score`: 1.0 if exact match, 0.7 if partial, 0.3 if only district-level, 0.0 if failed
 
 Thresholds:
@@ -238,38 +285,22 @@ intensity = event_count * exp(-0.03 * hours_since_last_event)
 - Decay rate 0.03 means: ~50% intensity after 24h, ~15% after 72h
 - Backend aggregates into grid cells for performance
 
-### Self-Learning Dictionary
+### Few-Shot Learning (replaces Self-Learning Dictionary)
 
-- `slang_dictionary` table stores slang → resolved name mappings per city
-- **No fully automatic learning.** All auto-detected mappings go through validation.
+The system improves LLM accuracy over time not through a slang dictionary but through a growing pool of verified real examples from the channel.
 
-**Auto-learn workflow (pending queue):**
+**How it grows:**
 
-1. Analyzer extracts unknown term not in dictionary
-2. Geocoder resolves it to a location
-3. Entry is saved with `status = pending`, NOT active — it is not used for future processing yet
-4. System tracks occurrences: each time the same `slang → location` pair is detected, `usage_count` increments
-5. **Activation threshold:** entry becomes active (`status = active`) only when:
-   - `usage_count >= 3` (same mapping confirmed by 3+ independent posts) AND geocoder resolved to the same location each time
-   - OR admin manually approves via admin panel
-6. Admin can review pending entries in `/admin/dictionary` — approve, edit, or reject
-7. Active entries with no usage for 90 days → demoted back to `pending`
-8. Admin-added entries (`auto_learned = false`) are always active, never auto-demoted
+1. LLM extracts locations with confidence score (0.0–1.0)
+2. Admin reviews flagged or low-confidence locations in the admin panel
+3. On admin confirmation → `admin_verified = true` is set on the `Location` record
+4. Verified locations with `confidence >= 0.95` enter the few-shot pool automatically
 
-**slang_dictionary status flow:**
+**Effect:** each pipeline cycle, 3 random examples from the pool are attached to the LLM prompt. The LLM sees real posts from this channel with confirmed correct extractions, which progressively improves its accuracy for local address patterns, landmarks, and mixed-language text.
 
-```
-detected → pending (inactive, not used for matching)
-              ↓ 3+ confirmations OR admin approval
-           active (used for matching)
-              ↓ 90 days no usage
-           pending (demoted, needs re-confirmation)
-              ↓ admin rejection
-           rejected (permanently excluded)
-```
+**Slang dictionary role (read-only reference):**
 
-- `usage_count` tracks how often the mapping was detected
-- Higher usage_count entries are shown first in admin review queue
+`slang_dictionary` is retained as an admin-visible reference table only — it is NOT used during pipeline processing. Admins can add notes about known local terms; the table may inform future prompt engineering or static example selection. No automatic pipeline interaction.
 
 ### Street Rename Handling
 
@@ -289,7 +320,7 @@ detected → pending (inactive, not used for matching)
 | telegram_id   | BIGINT UNIQUE         | Telegram message ID, prevents duplicates                                                                   |
 | channel_id    | BIGINT                | Telegram channel ID                                                                                        |
 | raw_text      | TEXT                  | Original post text from Telegram — preserved permanently even after deletion for manual address validation |
-| cleaned_text  | TEXT                  | Text after preprocessing (emoji removed, slang replaced, Unicode normalized)                               |
+| cleaned_text  | TEXT                  | Text after preprocessing (emoji removed, Unicode normalized) — sent to LLM                                 |
 | post_date     | TIMESTAMPTZ           | Original post date from Telegram                                                                           |
 | fetched_at    | TIMESTAMPTZ           | When the post was fetched                                                                                  |
 | status        | ENUM                  | pending, processed, failed, permanent_failure, unresolved                                                  |
@@ -300,19 +331,20 @@ detected → pending (inactive, not used for matching)
 
 ### locations
 
-| Column        | Type                  | Description                                                            |
-| ------------- | --------------------- | ---------------------------------------------------------------------- |
-| id            | SERIAL PK             |                                                                        |
-| post_id       | FK → posts            | One post can have multiple locations (1:N)                             |
-| geometry      | GEOMETRY (PostGIS)    | MVP: Point (all) or Polygon (districts only)                           |
-| geo_type      | ENUM                  | point, street, area, district (semantic type, independent of geometry) |
-| address       | TEXT                  | Resolved address text (free-form)                                      |
-| street_name   | VARCHAR NULL          | Normalized street name for grouping (NULL for districts/landmarks)     |
-| confidence    | FLOAT                 | 0.0–1.0, how certain the system is                                     |
-| out_of_bounds | BOOLEAN DEFAULT FALSE | Geocoder result was outside city bounding box                          |
-| resolved      | BOOLEAN               | Whether location was confirmed                                         |
-| resolved_by   | ENUM                  | auto, manual                                                           |
-| created_at    | TIMESTAMPTZ           |                                                                        |
+| Column         | Type                  | Description                                                            |
+| -------------- | --------------------- | ---------------------------------------------------------------------- |
+| id             | SERIAL PK             |                                                                        |
+| post_id        | FK → posts            | One post can have multiple locations (1:N)                             |
+| geometry       | GEOMETRY (PostGIS)    | MVP: Point (all) or Polygon (districts only)                           |
+| geo_type       | ENUM                  | point, street, area, district (semantic type, independent of geometry) |
+| address        | TEXT                  | Resolved address text (free-form)                                      |
+| street_name    | VARCHAR NULL          | Normalized street name for grouping (NULL for districts/landmarks)     |
+| confidence     | FLOAT                 | 0.0–1.0, how certain the system is                                     |
+| out_of_bounds  | BOOLEAN DEFAULT FALSE | Geocoder result was outside city bounding box                          |
+| resolved       | BOOLEAN               | Whether location was confirmed                                         |
+| resolved_by    | ENUM                  | auto, manual                                                           |
+| admin_verified | BOOLEAN DEFAULT FALSE | Admin explicitly confirmed this location — qualifies for few-shot pool |
+| created_at     | TIMESTAMPTZ           |                                                                        |
 
 ### cities
 
@@ -377,7 +409,7 @@ detected → pending (inactive, not used for matching)
 | query       | VARCHAR     | Geocoding query string |
 | result_lat  | FLOAT       |                        |
 | result_lng  | FLOAT       |                        |
-| result_type | VARCHAR     | Nominatim result type  |
+| result_type | VARCHAR     | Geocoder result type   |
 | created_at  | TIMESTAMPTZ |                        |
 | hit_count   | INT         | Number of cache hits   |
 
@@ -477,33 +509,29 @@ Response: `{ access_token }`
 
 Parameters: `page`, `limit`, `sort`
 
-**`POST /api/admin/unresolved/{id}/confirm`** — Confirm system-suggested location. Post status changes from `unresolved` → `processed`. Slang dictionary and geocode cache updated if applicable.
+**`POST /api/admin/unresolved/{id}/confirm`** — Confirm system-suggested location. Sets `admin_verified = true`, post status changes from `unresolved` → `processed`. Geocode cache updated if applicable.
 
-**`POST /api/admin/unresolved/{id}/edit`** — Manually correct location. Admin provides correct coordinates, geo_type, and address. Side effects: (1) creates/updates geocode_cache entry, (2) if post contained unknown slang that maps to this location, creates slang_dictionary entry with confidence 1.0, (3) overrides any previous auto-learned entry for same term.
+**`POST /api/admin/unresolved/{id}/edit`** — Manually correct location. Admin provides correct coordinates, geo_type, and address. Side effects: (1) creates/updates geocode_cache entry, (2) sets `admin_verified = true` on the corrected location.
 
-Request: `{ location: { lat, lng, geo_type, address }, slang_term?: string }`
+Request: `{ location: { lat, lng, geo_type, address } }`
 
 **`POST /api/admin/unresolved/{id}/reject`** — Mark post as not containing useful location data. Post is excluded from map display.
 
-**`GET /api/admin/dictionary`** — Paginated list of slang dictionary entries. Filterable by status (pending/active/rejected). Pending entries sorted by usage_count descending (most common first).
-
-Parameters: `status`, `page`, `limit`, `city_id`
-
-**`POST /api/admin/dictionary/{id}/approve`** — Approve pending slang entry. Sets status to active. Entry immediately starts being used in text analysis.
-
-**`POST /api/admin/dictionary/{id}/edit`** — Edit slang entry mapping. Admin can correct the resolved_name.
-
-Request: `{ resolved_name, entity_type }`
-
-**`POST /api/admin/dictionary/{id}/reject`** — Permanently reject a slang entry. Term will be ignored in future auto-detection.
-
-**`GET /api/admin/unrecognized-tokens`** — Top unrecognized tokens sorted by `occurrence_count` descending. Each entry includes sample post excerpts (from `sample_post_ids`) for context. Admin can: add to slang_dictionary (creates entry with `status = active`), dismiss (removes from list), or ignore.
+**`GET /api/admin/dictionary`** — Paginated list of slang dictionary entries (read-only reference, not used in pipeline). Admins can annotate local terms for documentation purposes.
 
 Parameters: `page`, `limit`, `city_id`
 
-**`POST /api/admin/unrecognized-tokens/{id}/add-to-dictionary`** — Convert unrecognized token to slang_dictionary entry. Admin provides `resolved_name` and `entity_type`. Entry created as `status = active`, `auto_learned = false`. Token removed from unrecognized list.
+**`POST /api/admin/dictionary`** — Add a reference entry (admin-only, informational).
 
-Request: `{ resolved_name, entity_type }`
+Request: `{ slang, resolved_name, entity_type }`
+
+**`DELETE /api/admin/dictionary/{id}`** — Remove a reference entry.
+
+**`GET /api/admin/unrecognized-tokens`** — Top addresses that LLM extracted but Google Maps could not geocode, sorted by `occurrence_count` descending. Each entry includes sample post excerpts for context. Admin can dismiss tokens that are not real addresses.
+
+Parameters: `page`, `limit`, `city_id`
+
+**`POST /api/admin/unrecognized-tokens/{id}/dismiss`** — Dismiss token from list. Token is soft-deleted, won't reappear.
 
 **`POST /api/admin/unrecognized-tokens/{id}/dismiss`** — Dismiss token from unrecognized list (not a location term). Token is soft-deleted, won't reappear.
 
@@ -623,13 +651,13 @@ Parameters: `page`, `limit`, `status`, `min_confidence`, `max_confidence`, `date
 - City bounding box — reject results outside city limits
 - Confidence scoring — below threshold → unresolved queue
 - Geocode caching — same street geocoded once
-- Fallback chain: cache → Nominatim → district dictionary
+- Fallback chain: cache → Google Maps Geocoding API → district dictionary
 - Geocode cache eliminates most repeated queries after warmup (80%+ hit rate expected)
 
 ### Street Renames
 
 - `street_renames` table with old→new mapping per city
-- Geocoder applies mapping before querying Nominatim
+- Geocoder applies mapping before querying Google Maps
 - Both old and new names stored for search
 
 ### Multiple Locations in One Post
@@ -678,9 +706,9 @@ Parameters: `page`, `limit`, `status`, `min_confidence`, `max_confidence`, `date
 
 ## AI Provider (Future Upgrade)
 
-Text analysis provider is abstracted behind an interface. MVP uses rule-based system + rapidfuzz (free, no external dependencies). When ready to invest in higher accuracy:
+Text analysis provider is abstracted behind an interface. MVP uses Gemini (Google AI Studio free tier). When ready to upgrade:
 
-- Gemini Flash (cheapest cloud option)
+- Gemini Pro / Flash (paid tiers for higher RPM)
 - OpenAI GPT-4o-mini
 - Claude Haiku
 - Local model via Ollama
@@ -695,26 +723,25 @@ Switch requires only configuration change, no pipeline modifications.
 
 Current architecture (APScheduler + single worker) handles up to ~50k posts/day comfortably. Migration triggers:
 
-| Signal                  | Threshold                    | Action                                        |
-| ----------------------- | ---------------------------- | --------------------------------------------- |
-| Pipeline cycle duration | > 30 min consistently        | Optimize bottleneck (likely geocoding)        |
-| Pipeline cycle duration | > 45 min consistently        | Migrate to Celery + Redis                     |
-| Number of channels      | > 5                          | Celery with per-channel task queue            |
-| Nominatim queue depth   | > 200 per cycle consistently | Add local Photon instance as primary geocoder |
+| Signal                  | Threshold                    | Action                                                      |
+| ----------------------- | ---------------------------- | ----------------------------------------------------------- |
+| Pipeline cycle duration | > 30 min consistently        | Optimize bottleneck (likely geocoding)                      |
+| Pipeline cycle duration | > 45 min consistently        | Migrate to Celery + Redis                                   |
+| Number of channels      | > 5                          | Celery with per-channel task queue                          |
+| Geocoding queue depth   | > 200 per cycle consistently | Monitor Google Maps billing; consider local Photon instance |
 
 Worker logs pipeline duration and queue depth per cycle. Admin stats endpoint includes these metrics for monitoring.
 
 ### External Service Degradation
 
-Both Nominatim and OSRM are public APIs without SLA. Graceful degradation strategy:
+Both Google Maps Geocoding API and OSRM are external APIs. Graceful degradation strategy:
 
-**Nominatim unavailable:**
+**Google Maps Geocoding API unavailable:**
 
-- Geocode cache covers 80%+ of queries after warmup — Nominatim outage has limited impact
-- If Nominatim returns errors/timeouts (3 consecutive failures) → skip Nominatim for remainder of cycle, fall through to district dictionary
-- Posts that needed Nominatim stay as `status = pending`, retried next cycle
+- Geocode cache covers 80%+ of queries after warmup — outage has limited impact
+- If API returns errors/timeouts (3 consecutive failures) → skip for remainder of cycle, fall through to district dictionary
+- Posts that needed geocoding stay as `status = pending`, retried next cycle
 - Log warning with failure count per cycle
-- Post-MVP: add local Photon to eliminate external dependency entirely
 
 **OSRM unavailable:**
 
@@ -731,7 +758,7 @@ Admin panel organizes statuses into **action-oriented sections**, not raw status
 
 - **Needs attention** (red count): unresolved posts + permanent_failure posts + high-frequency unrecognized tokens (occurrence_count ≥ 10)
 - **Pending review** (yellow count): pending slang entries + flagged locations (confidence 0.4–0.7) + out_of_bounds locations
-- **System health** (green/yellow/red): worker status, last pipeline time, Nominatim availability
+- **System health** (green/yellow/red): worker status, last pipeline time, Geocoding API availability
 - **Processed today** (info): posts processed, locations created, cache hit rate
 
 Each counter is a clickable link to the filtered list. Admin sees what needs action without understanding internal status enums.

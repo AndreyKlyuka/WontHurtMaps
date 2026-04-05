@@ -151,6 +151,30 @@ async def _execute_pipeline() -> None:
 
         await session.commit()
 
+        # --- 7.5. Process pending posts (Phase 2 pipeline) ---
+        await heartbeat_repo.upsert_heartbeat(status="running", current_job="process")
+        await session.commit()
+
+        pipeline_result = None
+        try:
+            from app.services.pipeline_orchestrator import PipelineOrchestrator
+
+            orchestrator = PipelineOrchestrator(session)
+            pipeline_result = await orchestrator.run()
+            logger.info(
+                "Processing pipeline complete",
+                extra={
+                    "posts_processed": pipeline_result.posts_processed,
+                    "posts_failed": pipeline_result.posts_failed,
+                    "locations_created": pipeline_result.locations_created,
+                    "cache_hits": pipeline_result.cache_hits,
+                    "unrecognized_count": pipeline_result.unrecognized_count,
+                    "skipped_circuit_open": pipeline_result.skipped_circuit_open,
+                },
+            )
+        except Exception:
+            logger.exception("Processing pipeline failed — fetch results preserved")
+
         # --- 8. Heartbeat: idle ---
         # Transaction-level advisory lock auto-releases on the commit below.
         # posts_processed reflects only newly saved posts — soft-deleted posts

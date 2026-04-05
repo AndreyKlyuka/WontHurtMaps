@@ -73,10 +73,9 @@ wonthurtmaps/
 
 ### 0.4 External Services
 
-- [x] Nominatim public API as sole geocoder for MVP (no local Photon)
-- [x] Geocode cache (DB-based, 90-day TTL) to minimize Nominatim requests
-- [x] Rate limiter: 1 req/sec to Nominatim (token bucket)
-- [ ] Post-MVP: add local Photon instance if Nominatim rate limit becomes a bottleneck
+- [x] Google Maps Geocoding API as sole geocoder for MVP
+- [x] Geocode cache (DB-based, 90-day TTL) to minimize Google Maps API requests
+- [ ] Post-MVP: monitor billing; add local Photon instance if cost becomes a concern
 
 ### 0.4.1 Seed Data Pipeline
 
@@ -107,7 +106,7 @@ See [Seed Data Pipeline Design](./seed-data-pipeline-design.md) for details.
 - Single Dockerfile, two entrypoints:
   - API: `uvicorn app.api.main:app --host 0.0.0.0 --port 8000`
   - Worker: `python -m app.worker`
-- No NLP models in MVP image — spaCy/LLM deferred to post-MVP
+- No local NLP models in MVP image — LLM extraction via external API (Gemini), spaCy deferred to post-MVP
 
 #### Frontend Dockerfile (`docker/frontend.Dockerfile`)
 
@@ -186,8 +185,14 @@ CORS_ORIGINS=http://localhost:4200
 
 # Worker
 PIPELINE_INTERVAL_MINUTES=60
-NOMINATIM_RATE_LIMIT=1.0
-NOMINATIM_QUEUE_MAX=500
+GEOCODING_QUEUE_MAX=500
+
+# Google APIs (https://console.cloud.google.com)
+# Gemini: enable "Generative Language API" — https://aistudio.google.com
+GEMINI_API_KEY=your_gemini_api_key_here
+LLM_QUEUE_MAX=500
+# Google Maps: enable "Geocoding API" in Google Maps Platform
+GOOGLE_MAPS_API_KEY=your_google_maps_api_key_here
 ```
 
 #### Production Extras (post-MVP, not in Phase 0)
@@ -299,63 +304,69 @@ Worker starts, connects to Telegram, fetches 499 posts into DB on bootstrap. On 
 
 ---
 
-## Phase 2: Text Processing Pipeline
+## Phase 2: Text Processing Pipeline ✅ DONE
 
 **Goal:** Process post text — from preprocessing to geocoding.
 
 ### 2.1 Text Preprocessor
 
-- [ ] Remove emoji, formatting artifacts
-- [ ] Unicode normalization (е/ё, і/i)
-- [ ] Replace slang from `slang_dictionary`
-- [ ] Store `cleaned_text`
+- [x] Remove emoji, formatting artifacts
+- [x] Unicode normalization (е/ё, і/i)
+- [x] Store `cleaned_text`
 
-### 2.2 Location Analyzer — Rule-Based
+### 2.2 Location Analyzer — LLM-Based
 
-- [ ] Abbreviation normalizer (вул., пр., бульв., пл., пров.)
-- [ ] City dictionaries: streets, districts, landmarks (JSON for Odesa)
-- [ ] Token-level fuzzy matching via `rapidfuzz`
-- [ ] Two-tier threshold: >= 90% high confidence, 80-89% candidate with penalty
-- [ ] Pattern-based extraction: `<street> + <number>`, `район + <name>`, `біля + <landmark>`
-- [ ] Output: `location_type`, `address`, `landmarks`, `confidence`
+- [x] LLM API client service (`app/services/llm_extractor.py`) with Gemini
+- [x] Prompt template: system prompt with city context + 3 dynamic few-shot examples from verified pool
+- [x] Few-shot pool query: `locations` where `confidence >= 0.95 AND admin_verified = true`, random 3, once per cycle
+- [x] Bootstrap fallback: static hardcoded Odesa examples when pool has < 3 entries
+- [x] Structured output schema: `locations[]` with `type`, `value`, `confidence` fields
+- [x] Pydantic model for LLM response validation (malformed JSON → retry once → `unresolved`)
+- [x] Rate limiter: 15 RPM token bucket
+- [x] Queue overflow protection: max 500, remainder stays `pending` until next cycle
+- [x] 3 consecutive LLM failures → skip for remainder of cycle
+- [x] `GEMINI_API_KEY` via ENV, managed via `pydantic-settings`
+- [x] Output: `location_type` (address/intersection/direction/district), `address`, `confidence`
 
-### 2.3 Unrecognized Token Logging
+### 2.3 Unrecognized Address Logging
 
-- [ ] Save unrecognized tokens to `unrecognized_tokens`
-- [ ] Increment `occurrence_count` for known tokens
-- [ ] Store `sample_post_ids` (up to 5)
+- [x] Save addresses that LLM extracted but Geocoder failed to resolve to `unrecognized_tokens`
+- [x] Increment `occurrence_count` for recurring unresolved addresses
+- [x] Store `sample_post_ids` (up to 5)
 
 ### 2.4 Geocoder
 
-- [ ] Geocode cache lookup
-- [ ] Street rename mapping (`street_renames` table, only active renames)
-- [ ] Nominatim geocoding with rate-limit queue (1 req/sec, token bucket)
-- [ ] District dictionary with fixed coordinates
-- [ ] Bounding box validation (city bbox)
-- [ ] Out-of-bounds handling: try next fallback, save with `out_of_bounds = true`
-- [ ] Queue overflow protection (max 500, remainder stays `pending` until next cycle)
-- [ ] 3 consecutive Nominatim failures → skip for remainder of cycle
+- [x] Geocode cache lookup
+- [x] Street rename mapping (`street_renames` table, only active renames)
+- [x] Google Maps Geocoding API with queue overflow protection
+- [x] District dictionary with fixed coordinates
+- [x] Bounding box validation (city bbox)
+- [x] Out-of-bounds handling: save with `out_of_bounds = true` and 0.3x confidence penalty
+- [x] Queue overflow protection (max 500, remainder stays `pending` until next cycle)
+- [x] 3 consecutive Google Maps failures → skip for remainder of cycle
+- [x] `GOOGLE_MAPS_API_KEY` via ENV, managed via `pydantic-settings`
 
 ### 2.5 Data Normalizer
 
-- [ ] Determine geometry type (Point/Polygon)
-- [ ] `geo_type` metadata (point/street/area/district)
-- [ ] Confidence scoring: `(extraction_score * 0.5) + (geocoder_score * 0.5)`
-- [ ] Slang candidate tracking (pending entries in `slang_dictionary`)
-- [ ] Save to `locations` table
-- [ ] Low confidence → `status = unresolved`
+- [x] Determine geometry type (Point/Polygon)
+- [x] `geo_type` metadata (point/street/area/district)
+- [x] Confidence scoring: `(extraction_score * 0.5) + (geocoder_score * 0.5)`
+- [x] Set `resolved = false` on all new locations (admin validates)
+- [x] Save to `locations` table
+- [x] Low confidence → `status = unresolved`
 
 ### 2.6 Pipeline Orchestration
 
-- [ ] Batch processing (100 posts)
-- [ ] Transaction with savepoint per post
-- [ ] Failure handling: `status=failed`, `error_message`, `retry_count`
-- [ ] Max 3 retries → `permanent_failure`
-- [ ] Logging: pipeline duration, queue depth per cycle
+- [x] Batch processing (up to 500 posts)
+- [x] Transaction with savepoint per post
+- [x] Failure handling: `status=failed`, `error_message`, `retry_count`
+- [x] Max 3 retries before permanent failure
+- [x] Logging: pipeline stats per cycle
+- [x] Integrated into worker (`app/worker/main.py`) as step 7.5
 
 ### Deliverable
 
-Worker full cycle: fetch → preprocess → analyze → geocode → normalize → save. Telegram posts are transformed into geolocations in DB. Unrecognized posts marked as unresolved.
+Worker full cycle implemented and verified: fetch → preprocess → analyze (Gemini) → geocode (Google Maps) → normalize → save. Telegram posts successfully transformed into geolocations in DB. Geocode cache populated (90-day TTL). Unrecognized tokens logged per city. Posts status updated: resolved/unresolved/failed.
 
 ---
 
@@ -517,7 +528,7 @@ Full admin panel: dashboard with counters, processing log, unresolved post manag
 
 ### 5.4 Error Handling & Resilience
 
-- [ ] Nominatim degradation: 3 consecutive failures → skip for cycle
+- [ ] Google Maps Geocoding API degradation: 3 consecutive failures → skip for cycle
 - [ ] OSRM unavailable → HTTP 503 + user-friendly message
 - [ ] Worker crash recovery: advisory lock auto-release
 
