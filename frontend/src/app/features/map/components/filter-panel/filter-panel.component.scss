@@ -1,0 +1,182 @@
+@use '../../../../shared/styles/tokens' as t;
+
+.filter-panel {
+  background: t.$color-bg;
+  border-bottom: t.$border;
+}
+
+.toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: t.$spacing-sm;
+  width: 100%;
+  padding: t.$spacing-sm t.$spacing-md;
+  background: none;
+  border: none;
+  border-bottom: t.$border;
+  font-family: t.$font-stack;
+  font-size: t.$font-size-base;
+  font-weight: 600;
+  color: t.$color-text;
+  cursor: pointer;
+  text-align: left;
+
+  &:hover {
+    background: #f5f5f5;
+  }
+
+  &:focus-visible {
+    outline: 2px solid t.$color-text;
+    outline-offset: -2px;
+  }
+}
+
+.panel-body {
+  padding: 0;
+}
+
+.section {
+  padding: t.$spacing-md;
+}
+
+.divider {
+  height: 1px;
+  background: t.$color-border;
+}
+
+.section-label {
+  display: block;
+  font-size: t.$font-size-sm;
+  font-weight: 600;
+  color: t.$color-muted;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: t.$spacing-sm;
+}
+
+.preset-row {
+  display: flex;
+  gap: t.$spacing-xs;
+  flex-wrap: wrap;
+  margin-bottom: t.$spacing-sm;
+}
+
+.preset-btn {
+  flex: 1 1 auto;
+  padding: t.$spacing-xs t.$spacing-sm;
+  background: none;
+  border: t.$border;
+  border-radius: t.$radius-sm;
+  font-family: t.$font-stack;
+  font-size: t.$font-size-sm;
+  color: t.$color-text;
+  cursor: pointer;
+
+  &:hover {
+    background: #f5f5f5;
+  }
+
+  &:focus-visible {
+    outline: 2px solid t.$color-text;
+    outline-offset: 2px;
+  }
+}
+
+.date-row {
+  display: flex;
+  align-items: center;
+  gap: t.$spacing-sm;
+  margin-bottom: t.$spacing-sm;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.date-label {
+  font-size: t.$font-size-sm;
+  color: t.$color-muted;
+  width: 32px;
+  flex-shrink: 0;
+}
+
+.date-input {
+  flex: 1;
+  padding: t.$spacing-xs t.$spacing-sm;
+  border: t.$border;
+  border-radius: t.$radius-sm;
+  font-family: t.$font-stack;
+  font-size: t.$font-size-sm;
+  color: t.$color-text;
+  background: t.$color-bg;
+
+  &:focus {
+    outline: 2px solid t.$color-text;
+    outline-offset: 0;
+  }
+}
+
+.mode-fieldset {
+  border: none;
+  padding: 0;
+  margin: 0;
+
+  legend {
+    float: left;
+    font-size: t.$font-size-sm;
+    font-weight: 600;
+    color: t.$color-muted;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: t.$spacing-sm;
+    width: 100%;
+  }
+}
+
+.mode-row {
+  display: flex;
+  gap: t.$spacing-md;
+  flex-wrap: wrap;
+}
+
+.radio-label {
+  display: flex;
+  align-items: center;
+  gap: t.$spacing-xs;
+  font-size: t.$font-size-sm;
+  color: t.$color-text;
+  cursor: pointer;
+
+  input[type='radio'] {
+    accent-color: t.$color-text;
+    cursor: pointer;
+  }
+}
+
+.confidence-slider {
+  width: 100%;
+  margin-top: t.$spacing-xs;
+  accent-color: t.$color-text;
+  cursor: pointer;
+}
+
+.reset-btn {
+  width: 100%;
+  padding: t.$spacing-sm;
+  background: none;
+  border: t.$border;
+  border-radius: t.$radius-sm;
+  font-family: t.$font-stack;
+  font-size: t.$font-size-sm;
+  color: t.$color-danger;
+  cursor: pointer;
+
+  &:hover {
+    background: #fdf0ef;
+  }
+
+  &:focus-visible {
+    outline: 2px solid t.$color-danger;
+    outline-offset: 2px;
+  }
+}

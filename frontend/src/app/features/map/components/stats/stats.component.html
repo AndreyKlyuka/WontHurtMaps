@@ -1,0 +1,13 @@
+<div class="stats-bar" role="status" aria-live="polite" aria-label="Location statistics">
+  @if (stats(); as s) {
+    <span class="stat">{{ s.total }} total</span>
+    <span class="sep" aria-hidden="true">&middot;</span>
+    <span class="stat">{{ s.today }} today</span>
+    <span class="sep" aria-hidden="true">&middot;</span>
+    <span class="stat">{{ s.this_week }} week</span>
+    <span class="sep" aria-hidden="true">&middot;</span>
+    <span class="stat">{{ s.this_month }} month</span>
+  } @else {
+    <span class="stat muted">&mdash;</span>
+  }
+</div>

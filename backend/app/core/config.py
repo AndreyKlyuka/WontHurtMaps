@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     geocoding_queue_max: int = 500
     geocoding_max_consecutive_failures: int = 3
 
+    # Route Check (OSRM)
+    osrm_url: str = "https://router.project-osrm.org"
+
+    # API Cache
+    api_cache_ttl_seconds: int = 600
+
     # Worker
     pipeline_interval_minutes: int = 60
 

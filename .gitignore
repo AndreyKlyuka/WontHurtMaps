@@ -26,6 +26,7 @@ data/seed/street_renames.json
 frontend/node_modules/
 frontend/dist/
 frontend/.angular/
+frontend/src/assets/env.js
 
 # Docker
 pgdata/

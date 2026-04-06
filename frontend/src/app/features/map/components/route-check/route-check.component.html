@@ -1,0 +1,143 @@
+<section class="route-check" aria-label="Route danger check">
+  <h2 class="section-title">Route Check</h2>
+
+  <div class="coord-group">
+    <p class="coord-label">Origin</p>
+    <div class="coord-row">
+      <div class="coord-field">
+        <input
+          class="coord-input"
+          [class.has-error]="originLat().error"
+          type="number"
+          step="any"
+          placeholder="Lat"
+          aria-label="Origin latitude"
+          [value]="originLat().value"
+          (input)="updateOriginLat($any($event.target).value)"
+        />
+        @if (originLat().error) {
+          <span class="field-error" role="alert">{{ originLat().error }}</span>
+        }
+      </div>
+      <div class="coord-field">
+        <input
+          class="coord-input"
+          [class.has-error]="originLng().error"
+          type="number"
+          step="any"
+          placeholder="Lng"
+          aria-label="Origin longitude"
+          [value]="originLng().value"
+          (input)="updateOriginLng($any($event.target).value)"
+        />
+        @if (originLng().error) {
+          <span class="field-error" role="alert">{{ originLng().error }}</span>
+        }
+      </div>
+    </div>
+  </div>
+
+  <div class="coord-group">
+    <p class="coord-label">Destination</p>
+    <div class="coord-row">
+      <div class="coord-field">
+        <input
+          class="coord-input"
+          [class.has-error]="destLat().error"
+          type="number"
+          step="any"
+          placeholder="Lat"
+          aria-label="Destination latitude"
+          [value]="destLat().value"
+          (input)="updateDestLat($any($event.target).value)"
+        />
+        @if (destLat().error) {
+          <span class="field-error" role="alert">{{ destLat().error }}</span>
+        }
+      </div>
+      <div class="coord-field">
+        <input
+          class="coord-input"
+          [class.has-error]="destLng().error"
+          type="number"
+          step="any"
+          placeholder="Lng"
+          aria-label="Destination longitude"
+          [value]="destLng().value"
+          (input)="updateDestLng($any($event.target).value)"
+        />
+        @if (destLng().error) {
+          <span class="field-error" role="alert">{{ destLng().error }}</span>
+        }
+      </div>
+    </div>
+  </div>
+
+  <div class="slider-group">
+    <label class="slider-label" for="hours-slider">
+      Hours: <strong>{{ hours() }}</strong>
+    </label>
+    <input
+      id="hours-slider"
+      type="range"
+      class="slider"
+      min="1"
+      max="168"
+      step="1"
+      [value]="hours()"
+      (input)="hours.set(+$any($event.target).value)"
+      [attr.aria-valuenow]="hours()"
+      aria-valuemin="1"
+      aria-valuemax="168"
+    />
+  </div>
+
+  <div class="slider-group">
+    <label class="slider-label" for="radius-slider">
+      Radius: <strong>{{ radiusMeters() }}m</strong>
+    </label>
+    <input
+      id="radius-slider"
+      type="range"
+      class="slider"
+      min="10"
+      max="500"
+      step="10"
+      [value]="radiusMeters()"
+      (input)="radiusMeters.set(+$any($event.target).value)"
+      [attr.aria-valuenow]="radiusMeters()"
+      aria-valuemin="10"
+      aria-valuemax="500"
+    />
+  </div>
+
+  <button
+    type="button"
+    class="check-btn"
+    (click)="checkRoute()"
+    [disabled]="isLoading()"
+    [attr.aria-busy]="isLoading()"
+  >
+    @if (isLoading()) {
+      <span class="spinner" aria-hidden="true"></span>
+      Checking...
+    } @else {
+      Check Route
+    }
+  </button>
+
+  @if (errorMessage()) {
+    <p class="message error" role="alert">{{ errorMessage() }}</p>
+  }
+
+  @if (result(); as r) {
+    <div class="result" role="status">
+      @if (r.danger_count > 0) {
+        <p class="message danger">{{ r.danger_count }} danger {{ r.danger_count === 1 ? 'zone' : 'zones' }} on route</p>
+      } @else {
+        <p class="message safe">Route is clear &#10003;</p>
+      }
+      <button type="button" class="clear-btn" (click)="clearResult()">Clear</button>
+    </div>
+  }
+</section>

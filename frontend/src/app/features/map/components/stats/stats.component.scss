@@ -1,0 +1,27 @@
+@use '../../../../shared/styles/tokens' as t;
+
+.stats-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: t.$spacing-xs;
+  padding: 6px 12px;
+  background: t.$color-bg;
+  border: t.$border;
+  border-radius: t.$radius-sm;
+  font-family: t.$font-stack;
+  font-size: t.$font-size-sm;
+  color: t.$color-text;
+  white-space: nowrap;
+}
+
+.stat {
+  font-variant-numeric: tabular-nums;
+}
+
+.sep {
+  color: t.$color-muted;
+}
+
+.muted {
+  color: t.$color-muted;
+}

@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import logging
+from typing import TypedDict, cast
 
+from geoalchemy2.functions import ST_AsGeoJSON
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.district import District
 
 logger = logging.getLogger(__name__)
+
+
+class DistrictFeatureRow(TypedDict):
+    id: int
+    name: str
+    geojson: str
 
 
 class DistrictRepository:
@@ -39,6 +47,22 @@ class DistrictRepository:
             entry is not None,
         )
         return entry
+
+    async def get_geojson_features(self, city_id: int) -> list[DistrictFeatureRow]:
+        """Return districts for city as raw dicts with GeoJSON geometry string."""
+        stmt = select(
+            District.id,
+            District.name,
+            ST_AsGeoJSON(District.polygon).label("geojson"),
+        ).where(District.city_id == city_id)
+        result = await self._session.execute(stmt)
+        rows = result.mappings().all()
+        logger.debug(
+            "district get_geojson_features: city_id=%d count=%d",
+            city_id,
+            len(rows),
+        )
+        return [cast(DistrictFeatureRow, dict(row)) for row in rows]
 
     async def get_all(self, city_id: int) -> list[District]:
         """Return all districts for city (for LLM context and district fallback)."""

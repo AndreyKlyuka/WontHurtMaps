@@ -71,11 +71,8 @@ export class MapComponent implements OnInit, OnDestroy {
     center: ODESA_CENTER,
     zoom: DEFAULT_ZOOM,
     styles: MAP_STYLES,
-    disableDefaultUI: false,
+    disableDefaultUI: true,
     zoomControl: true,
-    mapTypeControl: false,
-    streetViewControl: false,
-    fullscreenControl: false,
   };
 
   readonly currentZoom = signal(DEFAULT_ZOOM);

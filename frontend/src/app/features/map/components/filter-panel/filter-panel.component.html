@@ -1,0 +1,97 @@
+<section class="filter-panel" aria-label="Map filters">
+  <button
+    class="toggle-btn"
+    type="button"
+    (click)="togglePanel()"
+    [attr.aria-expanded]="isOpen()"
+    aria-controls="filter-panel-body"
+  >
+    <span aria-hidden="true">&#9776;</span>
+    Filters
+  </button>
+
+  @if (isOpen()) {
+    <div id="filter-panel-body" class="panel-body">
+      <div class="section">
+        <div class="preset-row" role="group" aria-label="Date presets">
+          @for (preset of presets; track preset.value) {
+            <button type="button" class="preset-btn" (click)="applyPreset(preset.value)">
+              {{ preset.label }}
+            </button>
+          }
+        </div>
+
+        <div class="date-row">
+          <label class="date-label" for="date-from">From</label>
+          <input
+            id="date-from"
+            class="date-input"
+            type="datetime-local"
+            [value]="toDateInputValue(dateFrom())"
+            (change)="onDateFromChange($event)"
+          />
+        </div>
+
+        <div class="date-row">
+          <label class="date-label" for="date-to">To</label>
+          <input
+            id="date-to"
+            class="date-input"
+            type="datetime-local"
+            [value]="toDateInputValue(dateTo())"
+            (change)="onDateToChange($event)"
+          />
+        </div>
+      </div>
+
+      <div class="divider" role="separator"></div>
+
+      <div class="section">
+        <fieldset class="mode-fieldset">
+          <legend class="section-label">Mode</legend>
+          <div class="mode-row">
+            @for (mode of modes; track mode.value) {
+              <label class="radio-label">
+                <input
+                  type="radio"
+                  name="display-mode"
+                  [value]="mode.value"
+                  [checked]="displayMode() === mode.value"
+                  (change)="setDisplayMode(mode.value)"
+                />
+                {{ mode.label }}
+              </label>
+            }
+          </div>
+        </fieldset>
+      </div>
+
+      <div class="divider" role="separator"></div>
+
+      <div class="section">
+        <label class="section-label" for="confidence-range">
+          Min confidence: <strong>{{ confidencePct() }}%</strong>
+        </label>
+        <input
+          id="confidence-range"
+          type="range"
+          class="confidence-slider"
+          min="0"
+          max="100"
+          step="5"
+          [value]="confidencePct()"
+          (input)="onConfidenceChange($event)"
+          [attr.aria-valuenow]="confidencePct()"
+          aria-valuemin="0"
+          aria-valuemax="100"
+        />
+      </div>
+
+      <div class="divider" role="separator"></div>
+
+      <div class="section">
+        <button type="button" class="reset-btn" (click)="reset()">Reset</button>
+      </div>
+    </div>
+  }
+</section>
