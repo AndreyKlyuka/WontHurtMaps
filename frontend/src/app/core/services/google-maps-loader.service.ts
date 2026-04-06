@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { setOptions, importLibrary } from '@googlemaps/js-api-loader';
+import { importLibrary, setOptions } from '@googlemaps/js-api-loader';
 
 import { environment } from '../../../environments/environment';
 
@@ -9,11 +9,11 @@ export class GoogleMapsLoaderService {
     setOptions({
       key: environment.googleMapsApiKey,
       v: 'weekly',
-      libraries: ['visualization'],
     });
   }
 
-  async load(): Promise<google.maps.VisualizationLibrary> {
-    return await importLibrary('visualization');
+  async load(): Promise<void> {
+    await importLibrary('maps');
+    await importLibrary('visualization');
   }
 }
