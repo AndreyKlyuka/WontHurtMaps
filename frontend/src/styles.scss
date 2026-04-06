@@ -13,3 +13,29 @@ body {
   color: #111;
   background: #fff;
 }
+
+// InfoWindow popup styles (Google Maps InfoWindow renders outside Angular component tree)
+.geo-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #757575;
+  margin-right: 4px;
+}
+
+.confidence {
+  display: inline-block;
+  font-size: 11px;
+  color: #c0392b;
+  font-weight: 600;
+}
+
+.excerpt {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #757575;
+  border-top: 1px solid #e0e0e0;
+  padding-top: 4px;
+}
