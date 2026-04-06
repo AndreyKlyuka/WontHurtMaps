@@ -20,7 +20,7 @@ System for parsing Telegram channel posts about dangerous locations in a city, e
 
 | Layer           | Technology                                                                               |
 | --------------- | ---------------------------------------------------------------------------------------- |
-| Frontend        | Angular + Leaflet (OSM tiles)                                                            |
+| Frontend        | Angular + Google Maps JS API (@angular/google-maps)                                      |
 | Backend / API   | Python, FastAPI                                                                          |
 | Telegram client | Telethon (MTProto)                                                                       |
 | Text analysis   | LLM API (Gemini free tier) for structured address extraction; Pydantic output validation |
@@ -36,8 +36,8 @@ System for parsing Telegram channel posts about dangerous locations in a city, e
 ┌─────────────────────────────────────────────────────────────────┐
 │                        ANGULAR FRONTEND                         │
 │  ┌──────────┐  ┌──────────────┐  ┌────────────┐  ┌──────────┐   │
-│  │  Leaflet │  │  Heatmap     │  │  Date/Mode │  │  Admin   │   │
-│  │  Map     │  │  Layer       │  │  Filters   │  │  Panel   │   │
+│  │  Google  │  │  Heatmap     │  │  Date/Mode │  │  Admin   │   │
+│  │  Maps    │  │  Layer       │  │  Filters   │  │  Panel   │   │
 │  └──────────┘  └──────────────┘  └────────────┘  └──────────┘   │
 └────────────────────────┬────────────────────────────────────────┘
                          │ REST API (JSON / GeoJSON)

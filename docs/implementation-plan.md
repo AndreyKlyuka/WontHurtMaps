@@ -55,7 +55,7 @@ wonthurtmaps/
 ### 0.2 Frontend (Angular)
 
 - [x] Initialize Angular 21 project in `frontend/` (standalone components, no SSR needed)
-- [x] Install dependencies: Leaflet, leaflet.heat, leaflet.markercluster
+- [x] Install dependencies: @angular/google-maps, @googlemaps/js-api-loader, @googlemaps/markerclusterer
 - [x] Base structure: `frontend/src/app/core/`, `frontend/src/app/features/map/`, `frontend/src/app/features/admin/`, `frontend/src/app/shared/`
 - [x] Proxy config for API (development)
 - [x] Dockerfile for frontend (nginx + build)
@@ -370,63 +370,62 @@ Worker full cycle implemented and verified: fetch → preprocess → analyze (Ge
 
 ---
 
-## Phase 3: Public API & Map Frontend
+## Phase 3: Public API & Map Frontend ✓
 
 **Goal:** Display data on an interactive map.
 
+**Deliverable:** Public map with live danger data, heatmap, district view, filter panel, stats, and route check. Implemented on branch `feature/phase3-public-api-map`.
+
 ### 3.1 Public API Endpoints
 
-- [ ] `GET /api/locations` — GeoJSON FeatureCollection, mandatory `bbox`, PostGIS `ST_Within`
-- [ ] `GET /api/heatmap` — aggregated grid cells with time-decay intensity
-- [ ] `GET /api/route/check` — OSRM routing + `ST_DWithin` proximity check
-- [ ] `GET /api/stats` — counts per filter selection
-- [ ] `GET /api/cities` — list of cities
+- [x] `GET /api/locations` — GeoJSON FeatureCollection with bbox, date range, geo_type, post_excerpt
+- [x] `GET /api/heatmap` — time-decayed weight points for leaflet.heat
+- [x] `GET /api/route/check` — OSRM routing + `ST_DWithin` proximity check
+- [x] `GET /api/stats` — aggregate counts (total/today/week/month/by_geo_type)
+- [x] `GET /api/cities` — list of cities with bbox + center
+- [x] `GET /api/districts` — district polygons as GeoJSON FeatureCollection
 
 ### 3.2 API Performance
 
-- [ ] In-memory response cache (query string key, TTL 10 min or invalidate on pipeline completion)
-- [ ] Rate limiting via `slowapi` (60 req/min public, 120 req/min admin)
-- [ ] Server-side clustering at zoom < 14 (PostGIS grid-based grouping)
+- [x] In-memory async TTL response cache (10 min default, `ResponseCache` singleton)
+- [x] Rate limiting via `slowapi` (60 req/min on all public endpoints)
+- [ ] Server-side clustering at zoom < 14 (deferred — client-side markercluster used instead)
 
 ### 3.3 Frontend — Map
 
-- [ ] `MapComponent` with Leaflet + OSM light tiles
-- [ ] Leaflet.markercluster for points
-- [ ] leaflet.heat for heatmap layer
-- [ ] Popup on click: address, date, excerpt, confidence, geo_type badge
-- [ ] Display modes: Heatmap / Points & Streets / Districts
+- [x] `MapComponent` with Google Maps JS API (@angular/google-maps) + Swiss Minimal custom style
+- [x] @googlemaps/markerclusterer for points
+- [x] google.maps.visualization.HeatmapLayer for heatmap layer
+- [x] Popup on click: address, date, excerpt, confidence, geo_type badge
+- [x] Display modes: Heatmap / Points / Districts
 
 ### 3.4 Frontend — Sidebar & Filters
 
-- [ ] `FilterPanelComponent` — collapsible sidebar
-- [ ] Date Range picker + quick buttons (Today/Week/Month/All)
-- [ ] Display Mode toggle (radio)
-- [ ] Confidence slider
-- [ ] `StatsComponent` — live counts
-- [ ] `FilterService` — shared state, emits changes
+- [x] `FilterPanelComponent` — collapsible sidebar (mobile toggle)
+- [x] Date Range picker + quick buttons (Today/Week/Month/All)
+- [x] Display Mode toggle (radio)
+- [x] Confidence slider
+- [x] `StatsComponent` — live counts (refreshed every 5 min)
+- [x] `FilterService` — shared signal-based state
 
 ### 3.5 Frontend — Route Check
 
-- [ ] `RouteCheckComponent` — input A/B, relevance hours
-- [ ] OSRM route polyline display
-- [ ] Intersection warnings visualization
+- [x] `RouteCheckComponent` — input A/B, relevance hours + radius slider
+- [x] OSRM route polyline display (blue dashed)
+- [x] Danger location markers on route (red circles)
 
 ### 3.6 Frontend — Performance
 
-- [ ] Debounce filters (300ms) and map move (500ms)
-- [ ] Lazy loading by zoom (heatmap at low zoom, points at high zoom)
-- [ ] Cancel in-flight requests (RxJS `switchMap`)
-- [ ] Data refresh: poll `/api/stats` every 5 minutes
+- [x] Debounce filters (300ms) and map move (500ms)
+- [x] Lazy loading by zoom (heatmap at low zoom, points at high zoom)
+- [x] Cancel in-flight requests (RxJS `switchMap`)
+- [x] Data refresh: poll `/api/stats` every 5 minutes
 
 ### 3.7 Visual Style
 
-- [ ] Swiss Minimal: system sans-serif, white background, #111 text
-- [ ] Muted red for danger indicators
-- [ ] Thin borders, no shadows, generous whitespace
-
-### Deliverable
-
-Public map with all filters, heatmap, clustering, route check. Fully functional frontend for end users.
+- [x] Swiss Minimal: system sans-serif, white background, #111 text
+- [x] Muted red for danger indicators
+- [x] Thin borders, no shadows, generous whitespace
 
 ---
 

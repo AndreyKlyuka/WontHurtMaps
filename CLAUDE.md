@@ -43,7 +43,7 @@ Monorepo, two processes, shared PostgreSQL+PostGIS DB:
 | ------------ | ------------------------- | ------------------------------ |
 | **API**      | Python 3.12 / FastAPI     | REST endpoints (read-heavy)    |
 | **Worker**   | Python 3.12 / APScheduler | Hourly pipeline (write-heavy)  |
-| **Frontend** | Angular 21                | Leaflet map + admin panel      |
+| **Frontend** | Angular 21                | Google Maps + admin panel      |
 | **Scripts**  | Python                    | Seed data (OSM), Telegram auth |
 
 No in-process coupling — independent restart/scaling. Docker Compose as single deployment unit.
@@ -57,7 +57,7 @@ wonthurtmaps/
     models/         # SQLAlchemy 2.x + PostGIS models
     services/       # Business logic (slang dict, street renames, confidence)
   frontend/src/app/
-    features/map/   # Public map (Leaflet + leaflet.heat + markercluster)
+    features/map/   # Public map (Google Maps + markerclusterer + heatmap)
     features/admin/ # Admin panel (dashboard, unresolved, dictionary, log)
     core/           # Services, guards, interceptors
     shared/         # Reusable components
@@ -144,7 +144,7 @@ ng lint                               # ESLint + Prettier
 | `business-analyst`      | opus   | Requirements engineering, feature planning, task decomposition, MVP scope evaluation       |
 | `ddd-architect`         | opus   | Domain model design, bounded contexts, business logic placement decisions                  |
 | `developer`             | sonnet | Full-stack features (FastAPI + Angular), pipeline/worker logic, batch processing           |
-| `frontend-angular`      | sonnet | Frontend-only: Angular components, Leaflet map, SCSS, signals, responsive design           |
+| `frontend-angular`      | sonnet | Frontend-only: Angular components, Google Maps, SCSS, signals, responsive design           |
 | `dba`                   | sonnet | Schema design, Alembic migrations, query optimization, PostGIS, seed data                  |
 | `integration-architect` | sonnet | External APIs (Telegram, Google Maps, Google Gemini, OSM), retry/backoff, webhook handlers |
 | `debugger`              | sonnet | Bug investigation, stack traces, error diagnosis, root cause analysis                      |
