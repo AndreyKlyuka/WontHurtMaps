@@ -1,1 +1,13 @@
-<div id="map"></div>
+<div class="map-container">
+  @if (mapReady()) {
+    <google-map #googleMap [options]="mapOptions" (boundsChanged)="onBoundsChanged()" (zoomChanged)="onZoomChanged()">
+    </google-map>
+  }
+
+  <aside class="sidebar" aria-label="Map controls">
+    <whm-filter-panel />
+    <whm-route-check (routeResult)="onRouteResult($event)" />
+  </aside>
+
+  <whm-stats class="stats-overlay" />
+</div>
